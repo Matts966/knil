@@ -1,7 +1,7 @@
 package main
 
 import (
-	"./knil"
+	"github.com/Matts966/knil"
 	"golang.org/x/tools/go/analysis/singlechecker"
 )
 
