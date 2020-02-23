@@ -73,7 +73,7 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 			case ssa.CallInstruction:
 				c := instr.Common()
 				s := c.StaticCallee()
-				if s == nil || s.Object() == nil {
+				if s == nil || s.Object() == nil || isExported(s) {
 					continue
 				}
 
@@ -85,17 +85,17 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 				var fact panicArgs
 				pass.ImportObjectFact(f, &fact)
 				if fact == nil {
-					fact = nilnessOfS(stack, c.Args, isExported(s))
+					fact = nilnessesOf(stack, c.Args)
 					pass.ExportObjectFact(f, &fact)
 					updatedFunctions = append(updatedFunctions, s)
 					continue
 				}
 				var updated bool
 				if len(fact) == len(c.Args) {
-					fact, updated = compareAndMerge(fact, nilnessOfS(stack, c.Args, isExported(s)))
+					fact, updated = compareAndMerge(fact, nilnessesOf(stack, c.Args))
 				} else {
 					pass.Reportf(instr.Pos(), "not consistent argments count function: %#v,\narg1: %#v,\narg2: %#v", s, instr.Common().Args, fact)
-					fact, updated = compareAndMerge(fact, nilnessOfS(stack, c.Args, isExported(s)))
+					fact, updated = compareAndMerge(fact, nilnessesOf(stack, c.Args))
 				}
 				if updated {
 					pass.ExportObjectFact(f, &fact)
@@ -201,7 +201,7 @@ func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
 	diff := len(longer) - len(shorter)
 	for i, l := range longer {
 		if i > diff - 1 {
-			new[i] = max(l, shorter[i - diff])
+			new[i] = merge(l, shorter[i - diff])
 		} else {
 			new[i] = l
 		}
@@ -212,11 +212,11 @@ func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
 	return new, true
 }
 
-func max(a, b nilness) nilness {
-	if a > b {
-		return a
+func merge(a, b nilness) nilness {
+	if a * b == unknown || a != b {
+		return unknown
 	}
-	return b
+	return a
 }
 
 func runFunc(pass *analysis.Pass, fn *ssa.Function) {
@@ -408,14 +408,10 @@ var nilnessStrings = []string{"non-nil", "unknown", "nil"}
 
 func (n nilness) String() string { return nilnessStrings[n+1] }
 
-func nilnessOfS(stack []fact, vs []ssa.Value, isExported bool) []nilness {
+func nilnessesOf(stack []fact, vs []ssa.Value) []nilness {
 	ns := make([]nilness, len(vs))
 	for i, s := range vs {
-		if isExported {
-			ns[i] = max(unknown, nilnessOf(stack, s))
-		} else {
-			ns[i] = nilnessOf(stack, s)
-		}
+		ns[i] = nilnessOf(stack, s)
 	}
 	return ns
 }

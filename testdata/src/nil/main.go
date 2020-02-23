@@ -91,3 +91,24 @@ func i(x *int) error { // want i:"&\\[nil\\]"
 		}
 	}
 }
+
+func j(x *int) { // want j:"&\\[non-nil\\]"
+	_ = *x
+}
+
+func k() {
+	x := 0
+	j(&x)
+	x = 100
+	j(&x)
+}
+
+func l(x *int) { // want l:"&\\[unknown\\]"
+	_ = *x // want "nil dereference in load"
+}
+
+func m() {
+	x := 0
+	l(&x)
+	l(nil)
+}
