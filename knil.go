@@ -104,11 +104,36 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 			}
 		}
 
+		// For nil comparison blocks, report an error if the condition
+		// is degenerate, and push a nilness fact on the stack when
+		// visiting its true and false successor blocks.
 		if binop, tsucc, fsucc := eq(b); binop != nil {
 			xnil := nilnessOf(stack, binop.X)
 			ynil := nilnessOf(stack, binop.Y)
 
-			if xnil == isnil && ynil != isnil || xnil != isnil && ynil == isnil {
+			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
+				// If tsucc's or fsucc's sole incoming edge is impossible,
+				// it is unreachable.  Prune traversal of it and
+				// all the blocks it dominates.
+				// (We could be more precise with full dataflow
+				// analysis of control-flow joins.)
+				var skip *ssa.BasicBlock
+				if xnil == ynil {
+					skip = fsucc
+				} else {
+					skip = tsucc
+				}
+				for _, d := range b.Dominees() {
+					if d == skip && len(d.Preds) == 1 {
+						continue
+					}
+					visit(d, stack)
+				}
+				return
+			}
+
+			// "if x == nil" or "if nil == y" condition; x, y are unknown.
+			if xnil == isnil || ynil == isnil {
 				var f fact
 				if xnil == isnil {
 					// x is nil, y is unknown:
@@ -159,26 +184,6 @@ func isExported(function *ssa.Function) bool {
 	name := function.Name()
 	return unicode.IsUpper(rune(name[0]))
 }
-
-// func merge(a, b panicArgs) (panicArgs, bool) {
-// 	if len(a) == len(b) {
-// 		return compareAndMerge(a, b)
-// 	}
-// 	// varargs
-// 	// if len(a) > len(b) {
-
-// 	// } else {
-// 	// 	longer = b
-// 	// 	shorter = a
-// 	// }
-// 	// for i, s := range shorter {
-// 	// 	new[i] = max(s, longer[i])
-// 	// }
-// }
-
-// func shrink(p panicArgs, length int) panicArgs {
-// 	x = panicArgs[length-1:]
-// }
 
 func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
 	if reflect.DeepEqual(prev, now) {
@@ -280,40 +285,40 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 			xnil := nilnessOf(stack, binop.X)
 			ynil := nilnessOf(stack, binop.Y)
 
-			// Use only in complete check, isnil sometimes means unknown in sound check.
-			// if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
+			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
 				// Degenerate condition:
 				// the nilness of both operands is known,
 				// and at least one of them is nil.
-				// var adj string
-				// if (xnil == ynil) == (binop.Op == token.EQL) {
-				// 	adj = "tautological"
-				// } else {
-				// 	adj = "impossible"
-				// }
-				// reportf("cond", binop.Pos(), "%s condition: %s %s %s", adj, xnil, binop.Op, ynil)
+				var adj string
+				if (xnil == ynil) == (binop.Op == token.EQL) {
+					adj = "tautological"
+				} else {
+					adj = "impossible"
+				}
+				reportf("cond", binop.Pos(), "%s condition: %s %s %s", adj, xnil, binop.Op, ynil)
 
 				// If tsucc's or fsucc's sole incoming edge is impossible,
 				// it is unreachable.  Prune traversal of it and
 				// all the blocks it dominates.
 				// (We could be more precise with full dataflow
 				// analysis of control-flow joins.)
-				// var skip *ssa.BasicBlock
-				// if xnil == ynil {
-				// 	skip = fsucc
-				// } else {
-				// 	skip = tsucc
-				// }
-				// for _, d := range b.Dominees() {
-				// 	if d == skip && len(d.Preds) == 1 {
-				// 		continue
-				// 	}
-				// 	visit(d, stack)
-				// }
-				// return
-			// }
+				var skip *ssa.BasicBlock
+				if xnil == ynil {
+					skip = fsucc
+				} else {
+					skip = tsucc
+				}
+				for _, d := range b.Dominees() {
+					if d == skip && len(d.Preds) == 1 {
+						continue
+					}
+					visit(d, stack)
+				}
+				return
+			}
 
-			if xnil == isnil && ynil != isnil || xnil != isnil && ynil == isnil {
+			// "if x == nil" or "if nil == y" condition; x, y are unknown.
+			if xnil == isnil || ynil == isnil {
 				var f fact
 				if xnil == isnil {
 					// x is nil, y is unknown:
