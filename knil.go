@@ -94,8 +94,8 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 				if len(fact) == len(c.Args) {
 					fact, updated = compareAndMerge(fact, nilnessOfS(stack, c.Args, isExported(s)))
 				} else {
-					pass.Reportf(instr.Pos(), "not consistent argments count function: %#v, arg1: %#v, arg2: %#v", s, instr.Common().Args, fact)
-					continue
+					pass.Reportf(instr.Pos(), "not consistent argments count function: %#v,\narg1: %#v,\narg2: %#v", s, instr.Common().Args, fact)
+					fact, updated = compareAndMerge(fact, nilnessOfS(stack, c.Args, isExported(s)))
 				}
 				if updated {
 					pass.ExportObjectFact(f, &fact)
@@ -104,36 +104,11 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 			}
 		}
 
-		// For nil comparison blocks, report an error if the condition
-		// is degenerate, and push a nilness fact on the stack when
-		// visiting its true and false successor blocks.
 		if binop, tsucc, fsucc := eq(b); binop != nil {
 			xnil := nilnessOf(stack, binop.X)
 			ynil := nilnessOf(stack, binop.Y)
 
-			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
-				// If tsucc's or fsucc's sole incoming edge is impossible,
-				// it is unreachable.  Prune traversal of it and
-				// all the blocks it dominates.
-				// (We could be more precise with full dataflow
-				// analysis of control-flow joins.)
-				var skip *ssa.BasicBlock
-				if xnil == ynil {
-					skip = fsucc
-				} else {
-					skip = tsucc
-				}
-				for _, d := range b.Dominees() {
-					if d == skip && len(d.Preds) == 1 {
-						continue
-					}
-					visit(d, stack)
-				}
-				return
-			}
-
-			// "if x == nil" or "if nil == y" condition; x, y are unknown.
-			if xnil == isnil || ynil == isnil {
+			if xnil == isnil && ynil != isnil || xnil != isnil && ynil == isnil {
 				var f fact
 				if xnil == isnil {
 					// x is nil, y is unknown:
@@ -144,7 +119,6 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 					// t successor learns x is nil.
 					f = fact{binop.X, isnil}
 				}
-
 				for _, d := range b.Dominees() {
 					// Successor blocks learn a fact
 					// only at non-critical edges.
@@ -206,13 +180,29 @@ func isExported(function *ssa.Function) bool {
 // 	x = panicArgs[length-1:]
 // }
 
-func compareAndMerge(a, b panicArgs) (panicArgs, bool) {
-	new := make(panicArgs, len(a))
-	if reflect.DeepEqual(a, b) {
-		return a, false
+func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
+	if reflect.DeepEqual(prev, now) {
+		return prev, false
 	}
-	for i, x := range a {
-		new[i] = max(x, b[i])
+	var longer, shorter panicArgs
+	if len(prev) > len(now) {
+		longer = prev
+		shorter = now
+	} else {
+		longer = now
+		shorter = prev
+	}
+	new := make(panicArgs, len(longer))
+	diff := len(longer) - len(shorter)
+	for i, l := range longer {
+		if i > diff - 1 {
+			new[i] = max(l, shorter[i - diff])
+		} else {
+			new[i] = l
+		}
+	}
+	if reflect.DeepEqual(prev, new) {
+		return prev, false
 	}
 	return new, true
 }
@@ -290,40 +280,40 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 			xnil := nilnessOf(stack, binop.X)
 			ynil := nilnessOf(stack, binop.Y)
 
-			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
+			// Use only in complete check, isnil sometimes means unknown in sound check.
+			// if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
 				// Degenerate condition:
 				// the nilness of both operands is known,
 				// and at least one of them is nil.
-				var adj string
-				if (xnil == ynil) == (binop.Op == token.EQL) {
-					adj = "tautological"
-				} else {
-					adj = "impossible"
-				}
-				reportf("cond", binop.Pos(), "%s condition: %s %s %s", adj, xnil, binop.Op, ynil)
+				// var adj string
+				// if (xnil == ynil) == (binop.Op == token.EQL) {
+				// 	adj = "tautological"
+				// } else {
+				// 	adj = "impossible"
+				// }
+				// reportf("cond", binop.Pos(), "%s condition: %s %s %s", adj, xnil, binop.Op, ynil)
 
 				// If tsucc's or fsucc's sole incoming edge is impossible,
 				// it is unreachable.  Prune traversal of it and
 				// all the blocks it dominates.
 				// (We could be more precise with full dataflow
 				// analysis of control-flow joins.)
-				var skip *ssa.BasicBlock
-				if xnil == ynil {
-					skip = fsucc
-				} else {
-					skip = tsucc
-				}
-				for _, d := range b.Dominees() {
-					if d == skip && len(d.Preds) == 1 {
-						continue
-					}
-					visit(d, stack)
-				}
-				return
-			}
+				// var skip *ssa.BasicBlock
+				// if xnil == ynil {
+				// 	skip = fsucc
+				// } else {
+				// 	skip = tsucc
+				// }
+				// for _, d := range b.Dominees() {
+				// 	if d == skip && len(d.Preds) == 1 {
+				// 		continue
+				// 	}
+				// 	visit(d, stack)
+				// }
+				// return
+			// }
 
-			// "if x == nil" or "if nil == y" condition; x, y are unknown.
-			if xnil == isnil || ynil == isnil {
+			if xnil == isnil && ynil != isnil || xnil != isnil && ynil == isnil {
 				var f fact
 				if xnil == isnil {
 					// x is nil, y is unknown:
@@ -334,7 +324,6 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 					// t successor learns x is nil.
 					f = fact{binop.X, isnil}
 				}
-
 				for _, d := range b.Dominees() {
 					// Successor blocks learn a fact
 					// only at non-critical edges.
@@ -372,8 +361,23 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 		visit(fn.Blocks[0], f)
 		return
 	}
+	if len(fn.Params) == len(pa) {
+		for i, p := range fn.Params {
+			f = append(f, fact{p, pa[i]})
+		}
+		visit(fn.Blocks[0], f)
+		return
+	}
+	pass.Reportf(fn.Pos(), "not consistent argments count function: %#v,\narg1: %#v,\narg2: %#v", fn, fn.Params, pa)
+	if len(fn.Params) > len(pa) {
+		for i, p := range pa {
+			f = append(f, fact{fn.Params[i+1], p})
+		}
+		visit(fn.Blocks[0], f)
+		return
+	}
 	for i, p := range fn.Params {
-		f = append(f, fact{p, pa[i]})
+		f = append(f, fact{p, pa[i+1]})
 	}
 	visit(fn.Blocks[0], f)
 }
