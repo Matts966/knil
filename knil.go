@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"go/token"
 	"go/types"
+	"math"
 	"reflect"
 	"unicode"
 
@@ -94,7 +95,11 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 				if len(fact) == len(c.Args) {
 					fact, updated = compareAndMerge(fact, nilnessesOf(stack, c.Args))
 				} else {
-					pass.Reportf(instr.Pos(), "not consistent argments count function: %#v,\narg1: %#v,\narg2: %#v", s, instr.Common().Args, fact)
+					// FreeVars[0]のnilnessとれない？
+					if math.Abs(float64(len(fact)-len(c.Args))) != 1 {
+						pass.Reportf(fn.Pos(), "not consistent arguments count: %#v,\narg1: %#v,\narg2: %#v", fn, fact, c.Args)
+						panic("inconsistent arguments but not method closure")
+					}
 					fact, updated = compareAndMerge(fact, nilnessesOf(stack, c.Args))
 				}
 				if updated {
@@ -200,8 +205,8 @@ func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
 	new := make(panicArgs, len(longer))
 	diff := len(longer) - len(shorter)
 	for i, l := range longer {
-		if i > diff - 1 {
-			new[i] = merge(l, shorter[i - diff])
+		if i > diff-1 {
+			new[i] = merge(l, shorter[i-diff])
 		} else {
 			new[i] = l
 		}
@@ -213,7 +218,7 @@ func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
 }
 
 func merge(a, b nilness) nilness {
-	if a * b == unknown || a != b {
+	if a*b == unknown || a != b {
 		return unknown
 	}
 	return a
@@ -373,7 +378,10 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 		visit(fn.Blocks[0], f)
 		return
 	}
-	pass.Reportf(fn.Pos(), "not consistent argments count function: %#v,\narg1: %#v,\narg2: %#v", fn, fn.Params, pa)
+	if math.Abs(float64(len(fn.Params)-len(pa))) != 1 {
+		pass.Reportf(fn.Pos(), "not consistent arguments count: %#v,\narg1: %#v,\narg2: %#v", fn, fn.Params, pa)
+		panic("inconsistent arguments but not method closure")
+	}
 	if len(fn.Params) > len(pa) {
 		for i, p := range pa {
 			f = append(f, fact{fn.Params[i+1], p})
