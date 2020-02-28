@@ -297,6 +297,12 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 			case *ssa.Store:
 				stack = notNil(stack, instr, instr.Addr, "store")
 			case *ssa.TypeAssert:
+				// Only the 1-result type assertion panics.
+				//
+				// _ = fp.(someType)
+				if instr.CommaOk {
+					continue
+				}
 				stack = notNil(stack, instr, instr.X, "type assertion")
 			case *ssa.UnOp:
 				if instr.Op == token.MUL { // *X
