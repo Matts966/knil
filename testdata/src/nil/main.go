@@ -112,3 +112,9 @@ func m() {
 	l(&x)
 	l(nil)
 }
+
+func n() {
+	var x interface{}
+	_, _ = x.(error)
+	_ = x.(error) // want "nil dereference in type assertion"
+}
