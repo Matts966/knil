@@ -13,6 +13,7 @@ import (
 	"go/types"
 	"math"
 	"reflect"
+	"regexp"
 	"unicode"
 
 	"golang.org/x/tools/go/analysis"
@@ -25,11 +26,13 @@ nil pointer dereference soundly
 `
 
 var Analyzer = &analysis.Analyzer{
-	Name:     "nilness",
+	Name:     "knil",
 	Doc:      doc,
 	Run:      run,
 	Requires: []*analysis.Analyzer{buildssa.Analyzer},
 }
+
+var ignoreFilesRegexp = `.*_test.go|zz_generated.*`
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	ssainput := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
@@ -40,9 +43,25 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		}
 	}
 	for _, fn := range ssainput.SrcFuncs {
+		if isIgnored(fn) {
+			continue
+		}
 		runFunc(pass, fn)
 	}
 	return nil, nil
+}
+
+func isIgnored(v *ssa.Function) bool {
+	m, err := regexp.MatchString(ignoreFilesRegexp, getFileName(v))
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
+func getFileName(v *ssa.Function) string {
+	fs := v.Prog.Fset
+	return fs.File(v.Pos()).Name()
 }
 
 // panicArgs has the information about arguments which causes panic on
