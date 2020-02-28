@@ -65,11 +65,10 @@ func getFileName(v *ssa.Function) string {
 	return fs.File(v.Pos()).Name()
 }
 
-// panicArgs has the information about arguments which causes panic on
-// calling the function when it is nil.
-type panicArgs []nilness
+// nilArgs has the information about arguments which can be nil.
+type nilArgs []nilness
 
-func (*panicArgs) AFact() {}
+func (*nilArgs) AFact() {}
 
 // checkFuncCall checks all the function calls with nil
 // parameters and export their information as ObjectFact.
@@ -103,7 +102,7 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 					continue
 				}
 
-				var fact panicArgs
+				var fact nilArgs
 				pass.ImportObjectFact(f, &fact)
 				if fact == nil {
 					fact = nilnessesOf(stack, c.Args)
@@ -210,11 +209,11 @@ func isExported(function *ssa.Function) bool {
 	return unicode.IsUpper(rune(name[0]))
 }
 
-func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
+func compareAndMerge(prev, now nilArgs) (nilArgs, bool) {
 	if reflect.DeepEqual(prev, now) {
 		return prev, false
 	}
-	var longer, shorter panicArgs
+	var longer, shorter nilArgs
 	if len(prev) > len(now) {
 		longer = prev
 		shorter = now
@@ -222,7 +221,7 @@ func compareAndMerge(prev, now panicArgs) (panicArgs, bool) {
 		longer = now
 		shorter = prev
 	}
-	new := make(panicArgs, len(longer))
+	new := make(nilArgs, len(longer))
 	diff := len(longer) - len(shorter)
 	for i, l := range longer {
 		if i > diff-1 {
@@ -414,7 +413,7 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 		return
 	}
 	f := make([]fact, 0, 20)
-	var pa panicArgs
+	var pa nilArgs
 	if fn.Object() != nil {
 		pass.ImportObjectFact(fn.Object(), &pa)
 	}
