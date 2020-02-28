@@ -253,11 +253,14 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 	}
 
 	// notNil reports an error if v is provably nil.
-	notNil := func(stack []fact, instr ssa.Instruction, v ssa.Value, descr string) {
+	notNil := func(stack []fact, instr ssa.Instruction, v ssa.Value, descr string) []fact {
 		nn := nilnessOf(stack, v)
 		if nn != isnonnil {
 			reportf("nilderef", instr.Pos(), "nil dereference in "+descr)
 		}
+		// Only report root cause
+		stack = append(stack, fact{v, isnonnil})
+		return stack
 	}
 
 	// visit visits reachable blocks of the CFG in dominance order,
@@ -278,26 +281,26 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 		for _, instr := range b.Instrs {
 			switch instr := instr.(type) {
 			case ssa.CallInstruction:
-				notNil(stack, instr, instr.Common().Value,
+				stack = notNil(stack, instr, instr.Common().Value,
 					instr.Common().Description())
 			case *ssa.FieldAddr:
-				notNil(stack, instr, instr.X, "field selection")
+				stack = notNil(stack, instr, instr.X, "field selection")
 			case *ssa.IndexAddr:
-				notNil(stack, instr, instr.X, "index operation")
+				stack = notNil(stack, instr, instr.X, "index operation")
 			case *ssa.MapUpdate:
-				notNil(stack, instr, instr.Map, "map update")
+				stack = notNil(stack, instr, instr.Map, "map update")
 			case *ssa.Slice:
 				// A nilcheck occurs in ptr[:] iff ptr is a pointer to an array.
 				if _, ok := instr.X.Type().Underlying().(*types.Pointer); ok {
-					notNil(stack, instr, instr.X, "slice operation")
+					stack = notNil(stack, instr, instr.X, "slice operation")
 				}
 			case *ssa.Store:
-				notNil(stack, instr, instr.Addr, "store")
+				stack = notNil(stack, instr, instr.Addr, "store")
 			case *ssa.TypeAssert:
-				notNil(stack, instr, instr.X, "type assertion")
+				stack = notNil(stack, instr, instr.X, "type assertion")
 			case *ssa.UnOp:
 				if instr.Op == token.MUL { // *X
-					notNil(stack, instr, instr.X, "load")
+					stack = notNil(stack, instr, instr.X, "load")
 				}
 			}
 		}
