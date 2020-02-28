@@ -9,5 +9,5 @@ Sound checker of nil pointer dereference almost based on "golang.org/x/tools/go/
 go get github.com/Matts966/knil/cmd/knil
 
 # to run on a package
-(cd package-dir && knil .)
+(cd package-dir && knil ./...)
 ```
