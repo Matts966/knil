@@ -14,7 +14,7 @@ func f(x, y *x) {
 			print(1)
 			panic(0)
 		}
-		x.f = 1 // want "nil dereference in field selection"
+		x.f = 1 // do not want "nil dereference in field selection" because root cause is x
 		y.f = 1 // want "nil dereference in field selection"
 	}
 
@@ -36,8 +36,8 @@ func f2(ptr *[3]int, i interface{}) {
 		print(*ptr)
 	} else {
 		print(ptr[:])   // want "nil dereference in slice operation"
-		*ptr = [3]int{} // want "nil dereference in store"
-		print(*ptr)     // want "nil dereference in load"
+		*ptr = [3]int{} // do not want "nil dereference in store" because root cause is ptr
+		print(*ptr)     // do not want "nil dereference in load" because root cause is ptr
 
 		if ptr != nil { // want "impossible condition: nil != nil"
 			// Dominated by ptr==nil and ptr!=nil,

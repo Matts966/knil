@@ -46,7 +46,8 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if isIgnored(fn) {
 			continue
 		}
-		runFunc(pass, fn)
+		alreadyReported := make(map[ssa.Instruction]struct{})
+		runFunc(pass, fn, alreadyReported)
 	}
 	return nil, nil
 }
@@ -243,7 +244,7 @@ func merge(a, b nilness) nilness {
 	return a
 }
 
-func runFunc(pass *analysis.Pass, fn *ssa.Function) {
+func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Instruction]struct{}) {
 	reportf := func(category string, pos token.Pos, format string, args ...interface{}) {
 		pass.Report(analysis.Diagnostic{
 			Pos:      pos,
@@ -253,14 +254,33 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 	}
 
 	// notNil reports an error if v is provably nil.
-	notNil := func(stack []fact, instr ssa.Instruction, v ssa.Value, descr string) []fact {
-		nn := nilnessOf(stack, v)
-		if nn != isnonnil {
-			reportf("nilderef", instr.Pos(), "nil dereference in "+descr)
+	notNil := func(stack []fact, instr ssa.Instruction, v ssa.Value, descr string) {
+		if nilnessOf(stack, v) == isnonnil {
+			return
 		}
-		// Only report root cause
-		stack = append(stack, fact{v, isnonnil})
-		return stack
+		reportf("nilderef", instr.Pos(), "nil dereference in "+descr)
+		// Only report root cause.
+		vrs := v.Referrers()
+		for vrs != nil {
+			nvrs := make([]ssa.Instruction, 0, 16)
+			for _, vr := range *vrs {
+				if _, ok := alreadyReported[vr]; ok {
+					continue
+				}
+				alreadyReported[vr] = struct{}{}
+				if vrn, ok := vr.(ssa.Node); ok {
+					vrnrs := vrn.Referrers()
+					if vrnrs == nil {
+						continue
+					}
+					nvrs = append(nvrs, *vrnrs...)
+				}
+			}
+			if len(nvrs) == 0 {
+				break
+			}
+			*vrs = nvrs
+		}
 	}
 
 	// visit visits reachable blocks of the CFG in dominance order,
@@ -279,23 +299,26 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 
 		// Report nil dereferences.
 		for _, instr := range b.Instrs {
+			if _, ok := alreadyReported[instr]; ok {
+				continue
+			}
 			switch instr := instr.(type) {
 			case ssa.CallInstruction:
-				stack = notNil(stack, instr, instr.Common().Value,
+				notNil(stack, instr, instr.Common().Value,
 					instr.Common().Description())
 			case *ssa.FieldAddr:
-				stack = notNil(stack, instr, instr.X, "field selection")
+				notNil(stack, instr, instr.X, "field selection")
 			case *ssa.IndexAddr:
-				stack = notNil(stack, instr, instr.X, "index operation")
+				notNil(stack, instr, instr.X, "index operation")
 			case *ssa.MapUpdate:
-				stack = notNil(stack, instr, instr.Map, "map update")
+				notNil(stack, instr, instr.Map, "map update")
 			case *ssa.Slice:
 				// A nilcheck occurs in ptr[:] iff ptr is a pointer to an array.
 				if _, ok := instr.X.Type().Underlying().(*types.Pointer); ok {
-					stack = notNil(stack, instr, instr.X, "slice operation")
+					notNil(stack, instr, instr.X, "slice operation")
 				}
 			case *ssa.Store:
-				stack = notNil(stack, instr, instr.Addr, "store")
+				notNil(stack, instr, instr.Addr, "store")
 			case *ssa.TypeAssert:
 				// Only the 1-result type assertion panics.
 				//
@@ -303,10 +326,10 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function) {
 				if instr.CommaOk {
 					continue
 				}
-				stack = notNil(stack, instr, instr.X, "type assertion")
+				notNil(stack, instr, instr.X, "type assertion")
 			case *ssa.UnOp:
 				if instr.Op == token.MUL { // *X
-					stack = notNil(stack, instr, instr.X, "load")
+					notNil(stack, instr, instr.X, "load")
 				}
 			}
 		}
