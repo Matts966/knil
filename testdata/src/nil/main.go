@@ -1,8 +1,8 @@
-package nil
+package nil // want package:"&{}"
 
 type x struct{ f, g int }
 
-func f(x, y *x) {
+func f(x, y *x) { // want f:"&{\\[\\] \\[\\] \\[\\]}"
 	if x == nil {
 		print(x.f) // want "nil dereference in field selection"
 	} else {
@@ -29,7 +29,7 @@ func f(x, y *x) {
 	}
 }
 
-func f2(ptr *[3]int, i interface{}) {
+func f2(ptr *[3]int, i interface{}) { // want f2:"&{\\[\\] \\[\\] \\[\\]}"
 	if ptr != nil {
 		print(ptr[:])
 		*ptr = [3]int{}
@@ -54,9 +54,9 @@ func f2(ptr *[3]int, i interface{}) {
 	}
 }
 
-func g() error // want g:"&{\\[\\] \\[\\]}"
+func g() error // want g:"&{\\[\\] \\[\\] \\[\\]}"
 
-func f3() error {
+func f3() error { // want f3:"&{\\[\\] \\[0\\] \\[\\]}"
 	err := g()
 	if err != nil {
 		return err
@@ -74,7 +74,7 @@ func f3() error {
 	return nil
 }
 
-func h(err error, b bool) {
+func h(err error, b bool) { // want h:"&{\\[\\] \\[\\] \\[\\]}"
 	if err != nil && b {
 		return
 	} else if err != nil {
@@ -82,7 +82,7 @@ func h(err error, b bool) {
 	}
 }
 
-func i(x *int) error { // want i:"&{\\[1\\] \\[\\]}"
+func i(x *int) error { // want i:"&{\\[1\\] \\[-1\\] \\[\\]}"
 	_ = *x // want "nil dereference in load"
 	i(nil)
 	for {
@@ -92,41 +92,41 @@ func i(x *int) error { // want i:"&{\\[1\\] \\[\\]}"
 	}
 }
 
-func j(x *int) { // want j:"&{\\[-1\\] \\[\\]}"
+func j(x *int) { // want j:"&{\\[-1\\] \\[\\] \\[\\]}"
 	_ = *x
 }
 
-func k() {
+func k() { // want k:"&{\\[\\] \\[\\] \\[\\]}"
 	x := 0
 	j(&x)
 	x = 100
 	j(&x)
 }
 
-func l(x *int) { // want l:"&{\\[0\\] \\[\\]}"
+func l(x *int) { // want l:"&{\\[0\\] \\[\\] \\[\\]}"
 	_ = *x // want "nil dereference in load"
 }
 
-func m() {
+func m() { // want m:"&{\\[\\] \\[\\] \\[\\]}"
 	x := 0
 	l(&x)
 	l(nil)
 }
 
-func n() {
+func n() { // want n:"&{\\[\\] \\[\\] \\[\\]}"
 	var x interface{}
 	_, _ = x.(error)
 	_ = x.(error) // want "nil dereference in type assertion"
 }
 
 type s struct {}
-func (v *s) m1() { // want m1:"&{\\[\\] \\[-1\\]}"
+func (v *s) m1() { // want m1:"&{\\[\\] \\[\\] \\[-1\\]}"
 	_ = *v // want "nil dereference in load"
 }
-func (v *s) m2() { // want m2:"&{\\[0\\] \\[\\]}"
+func (v *s) m2() { // want m2:"&{\\[0\\] \\[\\] \\[\\]}"
 	_ = *v // want "nil dereference in load"
 }
-func o() {
+func o() { // want o:"&{\\[\\] \\[\\] \\[\\]}"
 	s1 := s{}
 	m1 := s1.m1
 	var s2 *s
@@ -139,4 +139,15 @@ func o() {
 	m2 = s2.m2
 	m1()
 	m2()
+}
+
+func p() *int { // want p:"&{\\[\\] \\[-1\\] \\[\\]}"
+	_ = *q() // want "nil dereference in load"
+	x := 5
+	return &x
+}
+
+func q() *int { // want q:"&{\\[\\] \\[1\\] \\[\\]}"
+	_ = *p()
+	return nil
 }

@@ -35,12 +35,17 @@ var ignoreFilesRegexp = `.*_test.go|zz_generated.*`
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	ssainput := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
-	fns := ssainput.SrcFuncs
+	fns := setupMap(ssainput.SrcFuncs)
 	for len(fns) > 0 {
-		for _, fn := range fns {
-			fns = checkFuncCall(pass, fn)
+		newfns := make(map[*ssa.Function]struct{}, len(fns))
+		for fn := range fns {
+			for _, f := range checkFunc(pass, fn) {
+				newfns[f] = struct{}{}
+			}
 		}
+		fns = newfns
 	}
+	pass.ExportPackageFact(&pkgDone{})
 	for _, fn := range ssainput.SrcFuncs {
 		if isIgnored(fn) {
 			continue
@@ -49,6 +54,14 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		runFunc(pass, fn, alreadyReported)
 	}
 	return nil, nil
+}
+
+func setupMap(fs []*ssa.Function) map[*ssa.Function]struct{} {
+	ret := make(map[*ssa.Function]struct{}, len(fs))
+	for _, f := range fs {
+		ret[f] = struct{}{}
+	}
+	return ret
 }
 
 func isIgnored(v *ssa.Function) bool {
@@ -65,22 +78,23 @@ func getFileName(v *ssa.Function) string {
 }
 
 type functionInfo struct {
-	na   nilArgs
-	rfvs receiverFreeVariables
+	// na has the information about arguments which can be nil.
+	na   []nilness
+	nr   []nilness
+	rfvs []nilness
 }
-
-// nilArgs has the information about arguments which can be nil.
-type nilArgs []nilness
-
-type nilReturn []nilness
 
 type receiverFreeVariables []nilness
 
 func (*functionInfo) AFact() {}
 
-// checkFuncCall checks all the function calls with nil
+type pkgDone struct{}
+
+func (*pkgDone) AFact() {}
+
+// checkFunc checks all the function calls with nil
 // parameters and export their information as ObjectFact.
-func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
+func checkFunc(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 	var updatedFunctions []*ssa.Function
 	// visit visits reachable blocks of the CFG in dominance order,
 	// maintaining a stack of dominating nilness facts.
@@ -98,6 +112,20 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 
 		for _, instr := range b.Instrs {
 			switch instr := instr.(type) {
+			case *ssa.Return:
+				fi := functionInfo{}
+				if fn.Object() == nil {
+					continue
+				}
+				pass.ImportObjectFact(fn.Object(), &fi)
+				if len(fi.nr) == 0 {
+					fi.nr = nilnessesOf(stack, instr.Results)
+					pass.ExportObjectFact(fn.Object(), &fi)
+					continue
+				}
+				fi.nr, _ = mergeNilnesses(fi.nr, nilnessesOf(stack, instr.Results))
+				pass.ExportObjectFact(fn.Object(), &fi)
+				continue
 			case ssa.CallInstruction:
 				c := instr.Common()
 				s := c.StaticCallee()
@@ -107,23 +135,58 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 
 				f := s.Object()
 				if f.Pkg() != pass.Pkg {
+					if !pass.ImportPackageFact(f.Pkg(), &pkgDone{}) {
+						updatedFunctions = append(updatedFunctions, fn)
+						continue
+					}
+					fi := functionInfo{}
+					pass.ImportObjectFact(f, &fi)
+					switch len(fi.nr) {
+					case 0:
+						continue
+					case 1:
+						if v, ok := instr.(ssa.Value); ok {
+							stack = append(stack, fact{v, fi.nr[0]})
+						}
+						continue
+					default:
+						if v, ok := instr.(ssa.Value); ok {
+							vrs := v.Referrers()
+							if vrs == nil {
+								continue
+							}
+							c := 0
+							for _, vr := range *vrs {
+								if e, ok := vr.(*ssa.Extract); ok {
+									stack = append(stack, fact{e, fi.nr[c]})
+									c++
+								}
+							}
+						}
+						continue
+					}
 					continue
 				}
 
 				fact := functionInfo{}
 				pass.ImportObjectFact(f, &fact)
-				if len(fact.na) == 0 {
+				if len(fact.na) == 0 && len(fact.rfvs) == 0 {
 					fact.na = nilnessesOf(stack, c.Args)
 					if len(s.FreeVars) > 0 {
 						// Assume the receiver arguments are the first elements of FreeVars.
 						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
 					}
 					pass.ExportObjectFact(f, &fact)
-					updatedFunctions = append(updatedFunctions, s)
+					if len(fact.na) != 0 || len(fact.rfvs) != 0 {
+						updatedFunctions = append(updatedFunctions, s)
+					}
 					continue
 				}
 				var updated bool
 				if len(fact.na) == len(c.Args) {
+					if len(fact.na) == 0 {
+						continue
+					}
 					fact.na, updated = mergeNilnesses(fact.na, nilnessesOf(stack, c.Args))
 					if len(s.FreeVars) > 0 {
 						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
@@ -134,8 +197,7 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 					}
 					nnavwfv := nilnessesOf(stack, c.Args)
 					if len(fact.na) > len(c.Args) {
-						nnavwfv = append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...)
-						fact.na, updated = mergeNilnesses(fact.na, nnavwfv)
+						fact.na, updated = mergeNilnesses(fact.na, append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...))
 					} else {
 						fact.na, updated = mergeNilnesses(append([]nilness{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
 					}
@@ -228,11 +290,11 @@ func isExported(function *ssa.Function) bool {
 	return unicode.IsUpper(rune(name[0]))
 }
 
-func compareAndMerge(prev, now nilArgs) (nilArgs, bool) {
+func compareAndMerge(prev, now []nilness) ([]nilness, bool) {
 	if equal(prev, now) {
 		return prev, false
 	}
-	var longer, shorter nilArgs
+	var longer, shorter []nilness
 	if len(prev) > len(now) {
 		longer = prev
 		shorter = now
@@ -240,7 +302,7 @@ func compareAndMerge(prev, now nilArgs) (nilArgs, bool) {
 		longer = now
 		shorter = prev
 	}
-	new := make(nilArgs, len(longer))
+	new := make([]nilness, len(longer))
 	diff := len(longer) - len(shorter)
 	for i, l := range longer {
 		if i > diff-1 {
@@ -255,14 +317,14 @@ func compareAndMerge(prev, now nilArgs) (nilArgs, bool) {
 	return new, true
 }
 
-func mergeNilnesses(na, carg nilArgs) (nilArgs, bool) {
+func mergeNilnesses(na, carg []nilness) ([]nilness, bool) {
 	if len(na) != len(carg) {
 		panic("inconsistent arguments count")
 	}
 	if equal(na, carg) {
 		return na, false
 	}
-	nnn := make(nilArgs, len(na))
+	nnn := make([]nilness, len(na))
 	for i := range na {
 		nnn[i] = merge(na[i], carg[i])
 	}
@@ -366,6 +428,42 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 			case ssa.CallInstruction:
 				notNil(stack, instr, instr.Common().Value,
 					instr.Common().Description())
+
+				s := instr.Common().StaticCallee()
+				if s == nil {
+					continue
+				}
+				fo := s.Object()
+				if fo == nil {
+					continue
+				}
+
+				fi := functionInfo{}
+				pass.ImportObjectFact(fo, &fi)
+
+				if v, ok := instr.(ssa.Value); ok && len(fi.nr) > 0 {
+					vrs := v.Referrers()
+					if vrs == nil {
+						continue
+					}
+					c := 0
+					for _, vr := range *vrs {
+						switch i := vr.(type) {
+						case *ssa.Extract:
+							stack = append(stack, fact{i, fi.nr[c]})
+							c++
+						// 1 value is returned.
+						case ssa.Value:
+							if len(fi.nr) != 1 {
+								panic("inconsistent return values count")
+							}
+							stack = append(stack, fact{v, fi.nr[0]})
+							break
+						default:
+							panic("function return values are referenced not as values")
+						}
+					}
+				}
 			case *ssa.FieldAddr:
 				notNil(stack, instr, instr.X, "field selection")
 			// Currently we do not support check for index operations
