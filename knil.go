@@ -459,8 +459,6 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 							}
 							stack = append(stack, fact{v, fi.nr[0]})
 							break
-						default:
-							panic("function return values are referenced not as values")
 						}
 					}
 				}
