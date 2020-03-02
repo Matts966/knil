@@ -54,7 +54,7 @@ func f2(ptr *[3]int, i interface{}) {
 	}
 }
 
-func g() error // want g:"&\\[\\]"
+func g() error // want g:"&{\\[\\] \\[\\]}"
 
 func f3() error {
 	err := g()
@@ -82,7 +82,7 @@ func h(err error, b bool) {
 	}
 }
 
-func i(x *int) error { // want i:"&\\[nil\\]"
+func i(x *int) error { // want i:"&{\\[1\\] \\[\\]}"
 	_ = *x // want "nil dereference in load"
 	i(nil)
 	for {
@@ -92,7 +92,7 @@ func i(x *int) error { // want i:"&\\[nil\\]"
 	}
 }
 
-func j(x *int) { // want j:"&\\[non-nil\\]"
+func j(x *int) { // want j:"&{\\[-1\\] \\[\\]}"
 	_ = *x
 }
 
@@ -103,7 +103,7 @@ func k() {
 	j(&x)
 }
 
-func l(x *int) { // want l:"&\\[unknown\\]"
+func l(x *int) { // want l:"&{\\[0\\] \\[\\]}"
 	_ = *x // want "nil dereference in load"
 }
 
@@ -117,4 +117,26 @@ func n() {
 	var x interface{}
 	_, _ = x.(error)
 	_ = x.(error) // want "nil dereference in type assertion"
+}
+
+type s struct {}
+func (v *s) m1() { // want m1:"&{\\[\\] \\[-1\\]}"
+	_ = *v // want "nil dereference in load"
+}
+func (v *s) m2() { // want m2:"&{\\[0\\] \\[\\]}"
+	_ = *v // want "nil dereference in load"
+}
+func o() {
+	s1 := s{}
+	m1 := s1.m1
+	var s2 *s
+	m2 := s2.m1
+	m1()
+	m2()
+	s1.m2()
+	s2.m2()
+	m1 = s1.m2
+	m2 = s2.m2
+	m1()
+	m2()
 }

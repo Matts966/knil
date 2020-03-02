@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package nilness inspects the control-flow graph of an SSA function
+// Package knil inspects the control-flow graph of an SSA function
 // and reports errors such as nil pointer dereferences and degenerate
 // nil pointer comparisons.
 package knil
@@ -12,7 +12,6 @@ import (
 	"go/token"
 	"go/types"
 	"math"
-	"reflect"
 	"regexp"
 	"unicode"
 
@@ -65,10 +64,19 @@ func getFileName(v *ssa.Function) string {
 	return fs.File(v.Pos()).Name()
 }
 
+type functionInfo struct {
+	na   nilArgs
+	rfvs receiverFreeVariables
+}
+
 // nilArgs has the information about arguments which can be nil.
 type nilArgs []nilness
 
-func (*nilArgs) AFact() {}
+type nilReturn []nilness
+
+type receiverFreeVariables []nilness
+
+func (*functionInfo) AFact() {}
 
 // checkFuncCall checks all the function calls with nil
 // parameters and export their information as ObjectFact.
@@ -97,29 +105,41 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 					continue
 				}
 
-				f := c.StaticCallee().Object()
+				f := s.Object()
 				if f.Pkg() != pass.Pkg {
 					continue
 				}
 
-				var fact nilArgs
+				fact := functionInfo{}
 				pass.ImportObjectFact(f, &fact)
-				if fact == nil {
-					fact = nilnessesOf(stack, c.Args)
+				if fact.na == nil {
+					fact.na = nilnessesOf(stack, c.Args)
+					if len(s.FreeVars) > 0 {
+						// Assume the receiver arguments are the first elements of FreeVars.
+						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
+					}
 					pass.ExportObjectFact(f, &fact)
 					updatedFunctions = append(updatedFunctions, s)
 					continue
 				}
 				var updated bool
-				if len(fact) == len(c.Args) {
-					fact, updated = compareAndMerge(fact, nilnessesOf(stack, c.Args))
+				if len(fact.na) == len(c.Args) {
+					fact.na, updated = mergeNilnesses(fact.na, nilnessesOf(stack, c.Args))
+					if len(s.FreeVars) > 0 {
+						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
+					}
 				} else {
-					// FreeVars[0]のnilnessとれない？
-					if math.Abs(float64(len(fact)-len(c.Args))) != 1 {
+					if math.Abs(float64(len(fact.na)-len(c.Args))) != 1 {
 						pass.Reportf(fn.Pos(), "not consistent arguments count: %#v,\narg1: %#v,\narg2: %#v", fn, fact, c.Args)
 						panic("inconsistent arguments but not method closure")
 					}
-					fact, updated = compareAndMerge(fact, nilnessesOf(stack, c.Args))
+					nnavwfv := nilnessesOf(stack, c.Args)
+					if len(fact.na) > len(c.Args) {
+						nnavwfv = append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...)
+						fact.na, updated = mergeNilnesses(fact.na, nnavwfv)
+					} else {
+						fact.na, updated = mergeNilnesses(append([]nilness{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
+					}
 				}
 				if updated {
 					pass.ExportObjectFact(f, &fact)
@@ -210,7 +230,7 @@ func isExported(function *ssa.Function) bool {
 }
 
 func compareAndMerge(prev, now nilArgs) (nilArgs, bool) {
-	if reflect.DeepEqual(prev, now) {
+	if equal(prev, now) {
 		return prev, false
 	}
 	var longer, shorter nilArgs
@@ -230,10 +250,36 @@ func compareAndMerge(prev, now nilArgs) (nilArgs, bool) {
 			new[i] = l
 		}
 	}
-	if reflect.DeepEqual(prev, new) {
+	if equal(prev, new) {
 		return prev, false
 	}
 	return new, true
+}
+
+func mergeNilnesses(a, b nilArgs) (nilArgs, bool) {
+	if len(a) != len(b) {
+		panic("inconsistent arguments count")
+	}
+	if equal(a, b) {
+		return a, false
+	}
+	nnn := make(nilArgs, len(a))
+	for i := range a {
+		nnn[i] = merge(a[i], b[i])
+	}
+	return nnn, true
+}
+
+func equal(a, b []nilness) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func merge(a, b nilness) nilness {
@@ -241,6 +287,19 @@ func merge(a, b nilness) nilness {
 		return unknown
 	}
 	return a
+}
+
+func compressNilness(ns []nilness) nilness {
+	// ns should have at least 1 element here
+	// because if the count of arguments differs
+	// there should be receivers.
+	nv := ns[0]
+	for _, n := range ns {
+		if nv*n == unknown || nv != n {
+			return unknown
+		}
+	}
+	return nv
 }
 
 func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Instruction]struct{}) {
@@ -413,34 +472,29 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 		return
 	}
 	f := make([]fact, 0, 20)
-	var pa nilArgs
+	pa := functionInfo{}
 	if fn.Object() != nil {
 		pass.ImportObjectFact(fn.Object(), &pa)
 	}
-	if pa == nil {
+	if len(pa.na) == 0 {
 		visit(fn.Blocks[0], f)
 		return
 	}
-	if len(fn.Params) == len(pa) {
+	if len(fn.Params) == len(pa.na) {
 		for i, p := range fn.Params {
-			f = append(f, fact{p, pa[i]})
+			f = append(f, fact{p, pa.na[i]})
 		}
 		visit(fn.Blocks[0], f)
 		return
 	}
-	if math.Abs(float64(len(fn.Params)-len(pa))) != 1 {
-		pass.Reportf(fn.Pos(), "not consistent arguments count: %#v,\narg1: %#v,\narg2: %#v", fn, fn.Params, pa)
+	//print(len(pa.na), len(fn.Params))
+	if len(pa.na)-len(fn.Params) != 1 {
 		panic("inconsistent arguments but not method closure")
 	}
-	if len(fn.Params) > len(pa) {
-		for i, p := range pa {
-			f = append(f, fact{fn.Params[i+1], p})
-		}
-		visit(fn.Blocks[0], f)
-		return
-	}
+	// There should be a receiver argument.
+	f = append(f, fact{fn.FreeVars[0], pa.na[0]})
 	for i, p := range fn.Params {
-		f = append(f, fact{p, pa[i+1]})
+		f = append(f, fact{p, pa.na[i+1]})
 	}
 	visit(fn.Blocks[0], f)
 }
@@ -462,7 +516,7 @@ const (
 	isnil            = 1
 )
 
-var nilnessStrings = []string{"non-nil", "unknown", "nil"}
+var nilnessStrings = [...]string{"non-nil", "unknown", "nil"}
 
 func (n nilness) String() string { return nilnessStrings[n+1] }
 
