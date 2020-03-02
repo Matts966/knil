@@ -112,7 +112,7 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 
 				fact := functionInfo{}
 				pass.ImportObjectFact(f, &fact)
-				if fact.na == nil {
+				if len(fact.na) == 0 {
 					fact.na = nilnessesOf(stack, c.Args)
 					if len(s.FreeVars) > 0 {
 						// Assume the receiver arguments are the first elements of FreeVars.
@@ -130,7 +130,6 @@ func checkFuncCall(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 					}
 				} else {
 					if math.Abs(float64(len(fact.na)-len(c.Args))) != 1 {
-						pass.Reportf(fn.Pos(), "not consistent arguments count: %#v,\narg1: %#v,\narg2: %#v", fn, fact, c.Args)
 						panic("inconsistent arguments but not method closure")
 					}
 					nnavwfv := nilnessesOf(stack, c.Args)
@@ -256,16 +255,19 @@ func compareAndMerge(prev, now nilArgs) (nilArgs, bool) {
 	return new, true
 }
 
-func mergeNilnesses(a, b nilArgs) (nilArgs, bool) {
-	if len(a) != len(b) {
+func mergeNilnesses(na, carg nilArgs) (nilArgs, bool) {
+	if len(na) != len(carg) {
 		panic("inconsistent arguments count")
 	}
-	if equal(a, b) {
-		return a, false
+	if equal(na, carg) {
+		return na, false
 	}
-	nnn := make(nilArgs, len(a))
-	for i := range a {
-		nnn[i] = merge(a[i], b[i])
+	nnn := make(nilArgs, len(na))
+	for i := range na {
+		nnn[i] = merge(na[i], carg[i])
+	}
+	if equal(na, nnn) {
+		return nnn, false
 	}
 	return nnn, true
 }
