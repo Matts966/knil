@@ -368,8 +368,16 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 					instr.Common().Description())
 			case *ssa.FieldAddr:
 				notNil(stack, instr, instr.X, "field selection")
-			case *ssa.IndexAddr:
-				notNil(stack, instr, instr.X, "index operation")
+			// Currently we do not support check for index operations
+			// because range for slice is not Range in SSA. Range in
+			// SSA is only for map and string, and we can't distinguish
+			// range based addressing, which is safe, and naive
+			// addressing for nil, which cause an error. Also the error
+			// is index out of range, not nil pointer dereference,
+			//  even if the slice operand is nil.
+			//
+			// case *ssa.IndexAddr:
+			// 	notNil(stack, instr, instr.X, "index operation")
 			case *ssa.MapUpdate:
 				notNil(stack, instr, instr.Map, "map update")
 			case *ssa.Slice:
