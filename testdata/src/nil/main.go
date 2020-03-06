@@ -151,3 +151,17 @@ func q() *int { // want q:"&{\\[\\] \\[1\\] \\[\\]}"
 	_ = *p()
 	return nil
 }
+
+func r(i *int) { // want r:"&{\\[0\\] \\[\\] \\[\\]}"
+	_ = *i // do not want "nil dereference in load" because root cause is in sf.
+}
+func sf(i *int) { // want sf:"&{\\[\\] \\[\\] \\[\\]}"
+	_ = *i // want "nil dereference in load"
+	r(i)
+}
+
+// T is an exported function and should care about the nilness
+// of arguments.
+func T(i *int) { // want T:"&{\\[\\] \\[\\] \\[\\]}"
+	_ = *i // want "nil dereference in load"
+}
