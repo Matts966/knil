@@ -13,7 +13,6 @@ import (
 	"go/types"
 	"math"
 	"regexp"
-	"unicode"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
@@ -129,7 +128,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 			case ssa.CallInstruction:
 				c := instr.Common()
 				s := c.StaticCallee()
-				if s == nil || s.Object() == nil || isExported(s) {
+				if s == nil || s.Object() == nil || s.Object().Exported() {
 					continue
 				}
 
@@ -278,15 +277,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 	}
 
 	return updatedFunctions
-}
-
-func isExported(function *ssa.Function) bool {
-	if function.Parent() != nil {
-		return isExported(function.Parent())
-	}
-
-	name := function.Name()
-	return unicode.IsUpper(rune(name[0]))
 }
 
 func compareAndMerge(prev, now []nilness) ([]nilness, bool) {
@@ -462,7 +452,7 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 					}
 				}
 			case *ssa.FieldAddr:
-				notNil(stack, instr, instr.X, "field selection, " + instr.X.String() + " can be nil")
+				notNil(stack, instr, instr.X, "field selection, "+instr.X.String()+" can be nil")
 			// Currently we do not support check for index operations
 			// because range for slice is not Range in SSA. Range in
 			// SSA is only for map and string, and we can't distinguish
@@ -474,14 +464,14 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 			// case *ssa.IndexAddr:
 			// 	notNil(stack, instr, instr.X, "index operation")
 			case *ssa.MapUpdate:
-				notNil(stack, instr, instr.Map, "map update, " + instr.Map.String() + " can be nil")
+				notNil(stack, instr, instr.Map, "map update, "+instr.Map.String()+" can be nil")
 			case *ssa.Slice:
 				// A nilcheck occurs in ptr[:] iff ptr is a pointer to an array.
 				if _, ok := instr.X.Type().Underlying().(*types.Pointer); ok {
-					notNil(stack, instr, instr.X, "slice operation, " + instr.X.String() + " can be nil")
+					notNil(stack, instr, instr.X, "slice operation, "+instr.X.String()+" can be nil")
 				}
 			case *ssa.Store:
-				notNil(stack, instr, instr.Addr, "store, " + instr.Addr.String() + " can be nil")
+				notNil(stack, instr, instr.Addr, "store, "+instr.Addr.String()+" can be nil")
 			case *ssa.TypeAssert:
 				// Only the 1-result type assertion panics.
 				//
@@ -489,10 +479,10 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 				if instr.CommaOk {
 					continue
 				}
-				notNil(stack, instr, instr.X, "type assertion, " + instr.X.String() + " can be nil")
+				notNil(stack, instr, instr.X, "type assertion, "+instr.X.String()+" can be nil")
 			case *ssa.UnOp:
 				if instr.Op == token.MUL { // *X
-					notNil(stack, instr, instr.X, "load, " + instr.X.String() + " can be nil")
+					notNil(stack, instr, instr.X, "load, "+instr.X.String()+" can be nil")
 				}
 			}
 		}
