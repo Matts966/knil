@@ -35,10 +35,11 @@ var ignoreFilesRegexp = `.*_test.go|zz_generated.*`
 func run(pass *analysis.Pass) (interface{}, error) {
 	ssainput := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
 	fns := setupMap(ssainput.SrcFuncs)
+	alreadyReported := make(map[ssa.Instruction]struct{})
 	for len(fns) > 0 {
 		newfns := make(map[*ssa.Function]struct{}, len(fns))
 		for fn := range fns {
-			for _, f := range checkFunc(pass, fn) {
+			for _, f := range checkFunc(pass, fn, true, alreadyReported) {
 				newfns[f] = struct{}{}
 			}
 		}
@@ -49,8 +50,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if isIgnored(fn) {
 			continue
 		}
-		alreadyReported := make(map[ssa.Instruction]struct{})
-		runFunc(pass, fn, alreadyReported)
+		checkFunc(pass, fn, false, alreadyReported)
 	}
 	return nil, nil
 }
@@ -92,9 +92,17 @@ type pkgDone struct{}
 func (*pkgDone) AFact() {}
 
 // checkFunc checks all the function calls with nil
-// parameters and export their information as ObjectFact.
-func checkFunc(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
-	var updatedFunctions []*ssa.Function
+// parameters and export their information as ObjectFact,
+// and returns functions whose fact is updated.
+// If onlyCheck is true, checkFunc only checks functions and
+// exports facts.
+// Diagnostics are emitted using the facts if onlyCheck is false.
+//
+func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyReported map[ssa.Instruction]struct{}) []*ssa.Function {
+	if fn.Blocks == nil {
+		return nil
+	}
+
 	// visit visits reachable blocks of the CFG in dominance order,
 	// maintaining a stack of dominating nilness facts.
 	//
@@ -103,232 +111,185 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 	// we would need to retain the set of facts for each block.
 	seen := make([]bool, len(fn.Blocks)) // seen[i] means visit should ignore block i
 	var visit func(b *ssa.BasicBlock, stack []fact)
-	visit = func(b *ssa.BasicBlock, stack []fact) {
-		if seen[b.Index] {
-			return
-		}
-		seen[b.Index] = true
+	if onlyCheck {
+		// updatedFunctions stores functions whose fact is updated.
+		var updatedFunctions []*ssa.Function
+		visit = func(b *ssa.BasicBlock, stack []fact) {
+			if seen[b.Index] {
+				return
+			}
+			seen[b.Index] = true
 
-		for _, instr := range b.Instrs {
-			switch instr := instr.(type) {
-			case *ssa.Return:
-				fi := functionInfo{}
-				if fn.Object() == nil {
-					continue
-				}
-				pass.ImportObjectFact(fn.Object(), &fi)
-				if len(fi.nr) == 0 {
-					fi.nr = nilnessesOf(stack, instr.Results)
+			for _, instr := range b.Instrs {
+				switch instr := instr.(type) {
+				case *ssa.Return:
+					fi := functionInfo{}
+					if fn.Object() == nil {
+						continue
+					}
+					pass.ImportObjectFact(fn.Object(), &fi)
+					if len(fi.nr) == 0 {
+						fi.nr = nilnessesOf(stack, instr.Results)
+						pass.ExportObjectFact(fn.Object(), &fi)
+						continue
+					}
+					fi.nr, _ = mergeNilnesses(fi.nr, nilnessesOf(stack, instr.Results))
 					pass.ExportObjectFact(fn.Object(), &fi)
 					continue
-				}
-				fi.nr, _ = mergeNilnesses(fi.nr, nilnessesOf(stack, instr.Results))
-				pass.ExportObjectFact(fn.Object(), &fi)
-				continue
-			case ssa.CallInstruction:
-				c := instr.Common()
-				s := c.StaticCallee()
-				if s == nil || s.Object() == nil || s.Object().Exported() {
-					continue
-				}
-
-				f := s.Object()
-				if f.Pkg() != pass.Pkg {
-					if !pass.ImportPackageFact(f.Pkg(), &pkgDone{}) {
-						updatedFunctions = append(updatedFunctions, fn)
+				case ssa.CallInstruction:
+					c := instr.Common()
+					s := c.StaticCallee()
+					if s == nil || s.Object() == nil || s.Object().Exported() {
 						continue
 					}
-					fi := functionInfo{}
-					pass.ImportObjectFact(f, &fi)
-					switch len(fi.nr) {
-					case 0:
-						continue
-					case 1:
-						if v, ok := instr.(ssa.Value); ok {
-							stack = append(stack, fact{v, fi.nr[0]})
+
+					f := s.Object()
+					if f.Pkg() != pass.Pkg {
+						if !pass.ImportPackageFact(f.Pkg(), &pkgDone{}) {
+							updatedFunctions = append(updatedFunctions, fn)
+							continue
 						}
-						continue
-					default:
-						if v, ok := instr.(ssa.Value); ok {
-							vrs := v.Referrers()
-							if vrs == nil {
-								continue
+						fi := functionInfo{}
+						pass.ImportObjectFact(f, &fi)
+						switch len(fi.nr) {
+						case 0:
+							continue
+						case 1:
+							if v, ok := instr.(ssa.Value); ok {
+								stack = append(stack, fact{v, fi.nr[0]})
 							}
-							c := 0
-							for _, vr := range *vrs {
-								if e, ok := vr.(*ssa.Extract); ok {
-									stack = append(stack, fact{e, fi.nr[c]})
-									c++
+							continue
+						default:
+							if v, ok := instr.(ssa.Value); ok {
+								vrs := v.Referrers()
+								if vrs == nil {
+									continue
+								}
+								c := 0
+								for _, vr := range *vrs {
+									if e, ok := vr.(*ssa.Extract); ok {
+										stack = append(stack, fact{e, fi.nr[c]})
+										c++
+									}
 								}
 							}
+							continue
+						}
+					}
+
+					fact := functionInfo{}
+					pass.ImportObjectFact(f, &fact)
+					if len(fact.na) == 0 && len(fact.rfvs) == 0 {
+						fact.na = nilnessesOf(stack, c.Args)
+						if len(s.FreeVars) > 0 {
+							// Assume the receiver arguments are the first elements of FreeVars.
+							fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
+						}
+						pass.ExportObjectFact(f, &fact)
+						if len(fact.na) != 0 || len(fact.rfvs) != 0 {
+							updatedFunctions = append(updatedFunctions, s)
 						}
 						continue
 					}
-				}
-
-				fact := functionInfo{}
-				pass.ImportObjectFact(f, &fact)
-				if len(fact.na) == 0 && len(fact.rfvs) == 0 {
-					fact.na = nilnessesOf(stack, c.Args)
-					if len(s.FreeVars) > 0 {
-						// Assume the receiver arguments are the first elements of FreeVars.
-						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
+					var updated bool
+					if len(fact.na) == len(c.Args) {
+						if len(fact.na) == 0 {
+							continue
+						}
+						fact.na, updated = mergeNilnesses(fact.na, nilnessesOf(stack, c.Args))
+						if len(s.FreeVars) > 0 {
+							fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
+						}
+					} else {
+						if math.Abs(float64(len(fact.na)-len(c.Args))) != 1 {
+							panic("inconsistent arguments but not method closure")
+						}
+						nnavwfv := nilnessesOf(stack, c.Args)
+						if len(fact.na) > len(c.Args) {
+							fact.na, updated = mergeNilnesses(fact.na, append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...))
+						} else {
+							fact.na, updated = mergeNilnesses(append([]nilness{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
+						}
 					}
-					pass.ExportObjectFact(f, &fact)
-					if len(fact.na) != 0 || len(fact.rfvs) != 0 {
+					if updated {
+						pass.ExportObjectFact(f, &fact)
 						updatedFunctions = append(updatedFunctions, s)
 					}
-					continue
-				}
-				var updated bool
-				if len(fact.na) == len(c.Args) {
-					if len(fact.na) == 0 {
-						continue
-					}
-					fact.na, updated = mergeNilnesses(fact.na, nilnessesOf(stack, c.Args))
-					if len(s.FreeVars) > 0 {
-						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
-					}
-				} else {
-					if math.Abs(float64(len(fact.na)-len(c.Args))) != 1 {
-						panic("inconsistent arguments but not method closure")
-					}
-					nnavwfv := nilnessesOf(stack, c.Args)
-					if len(fact.na) > len(c.Args) {
-						fact.na, updated = mergeNilnesses(fact.na, append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...))
-					} else {
-						fact.na, updated = mergeNilnesses(append([]nilness{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
-					}
-				}
-				if updated {
-					pass.ExportObjectFact(f, &fact)
-					updatedFunctions = append(updatedFunctions, s)
 				}
 			}
-		}
 
-		// For nil comparison blocks, report an error if the condition
-		// is degenerate, and push a nilness fact on the stack when
-		// visiting its true and false successor blocks.
-		if binop, tsucc, fsucc := eq(b); binop != nil {
-			xnil := nilnessOf(stack, binop.X)
-			ynil := nilnessOf(stack, binop.Y)
+			// For nil comparison blocks, report an error if the condition
+			// is degenerate, and push a nilness fact on the stack when
+			// visiting its true and false successor blocks.
+			if binop, tsucc, fsucc := eq(b); binop != nil {
+				xnil := nilnessOf(stack, binop.X)
+				ynil := nilnessOf(stack, binop.Y)
 
-			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
-				// If tsucc's or fsucc's sole incoming edge is impossible,
-				// it is unreachable.  Prune traversal of it and
-				// all the blocks it dominates.
-				// (We could be more precise with full dataflow
-				// analysis of control-flow joins.)
-				var skip *ssa.BasicBlock
-				if xnil == ynil {
-					skip = fsucc
-				} else {
-					skip = tsucc
-				}
-				for _, d := range b.Dominees() {
-					if d == skip && len(d.Preds) == 1 {
-						continue
-					}
-					visit(d, stack)
-				}
-				return
-			}
-
-			// "if x == nil" or "if nil == y" condition; x, y are unknown.
-			if xnil == isnil || ynil == isnil {
-				var f fact
-				if xnil == isnil {
-					// x is nil, y is unknown:
-					// t successor learns y is nil.
-					f = fact{binop.Y, isnil}
-				} else {
-					// x is nil, y is unknown:
-					// t successor learns x is nil.
-					f = fact{binop.X, isnil}
-				}
-				for _, d := range b.Dominees() {
-					// Successor blocks learn a fact
-					// only at non-critical edges.
-					// (We could do be more precise with full dataflow
+				if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
+					// If tsucc's or fsucc's sole incoming edge is impossible,
+					// it is unreachable.  Prune traversal of it and
+					// all the blocks it dominates.
+					// (We could be more precise with full dataflow
 					// analysis of control-flow joins.)
-					s := stack
-					if len(d.Preds) == 1 {
-						if d == tsucc {
-							s = append(s, f)
-						} else if d == fsucc {
-							s = append(s, f.negate())
-						}
+					var skip *ssa.BasicBlock
+					if xnil == ynil {
+						skip = fsucc
+					} else {
+						skip = tsucc
 					}
-					visit(d, s)
+					for _, d := range b.Dominees() {
+						if d == skip && len(d.Preds) == 1 {
+							continue
+						}
+						visit(d, stack)
+					}
+					return
 				}
-				return
+
+				// "if x == nil" or "if nil == y" condition; x, y are unknown.
+				if xnil == isnil || ynil == isnil {
+					var f fact
+					if xnil == isnil {
+						// x is nil, y is unknown:
+						// t successor learns y is nil.
+						f = fact{binop.Y, isnil}
+					} else {
+						// x is nil, y is unknown:
+						// t successor learns x is nil.
+						f = fact{binop.X, isnil}
+					}
+					for _, d := range b.Dominees() {
+						// Successor blocks learn a fact
+						// only at non-critical edges.
+						// (We could do be more precise with full dataflow
+						// analysis of control-flow joins.)
+						s := stack
+						if len(d.Preds) == 1 {
+							if d == tsucc {
+								s = append(s, f)
+							} else if d == fsucc {
+								s = append(s, f.negate())
+							}
+						}
+						visit(d, s)
+					}
+					return
+				}
+			}
+
+			for _, d := range b.Dominees() {
+				visit(d, stack)
 			}
 		}
 
-		for _, d := range b.Dominees() {
-			visit(d, stack)
-		}
-	}
-
-	// Visit the entry block.  No need to visit fn.Recover.
-	if fn.Blocks != nil {
+		// Visit the entry block.  No need to visit fn.Recover.
 		visit(fn.Blocks[0], make([]fact, 0, 20)) // 20 is plenty
+
+		return updatedFunctions
 	}
 
-	return updatedFunctions
-}
+	// onlyCheck is false, emit diagnostics
 
-func mergeNilnesses(na, carg []nilness) ([]nilness, bool) {
-	if len(na) != len(carg) {
-		panic("inconsistent arguments count")
-	}
-	if equal(na, carg) {
-		return na, false
-	}
-	nnn := make([]nilness, len(na))
-	for i := range na {
-		nnn[i] = merge(na[i], carg[i])
-	}
-	if equal(na, nnn) {
-		return nnn, false
-	}
-	return nnn, true
-}
-
-func equal(a, b []nilness) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func merge(a, b nilness) nilness {
-	if a*b == unknown || a != b {
-		return unknown
-	}
-	return a
-}
-
-func compressNilness(ns []nilness) nilness {
-	// ns should have at least 1 element here
-	// because if the count of arguments differs
-	// there should be receivers.
-	nv := ns[0]
-	for _, n := range ns {
-		if nv*n == unknown || nv != n {
-			return unknown
-		}
-	}
-	return nv
-}
-
-func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Instruction]struct{}) {
 	reportf := func(category string, pos token.Pos, format string, args ...interface{}) {
 		pass.Report(analysis.Diagnostic{
 			Pos:      pos,
@@ -336,7 +297,6 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 			Message:  fmt.Sprintf(format, args...),
 		})
 	}
-
 	// notNil reports an error if v can be nil.
 	notNil := func(stack []fact, instr ssa.Instruction, v ssa.Value, descr string) {
 		if nilnessOf(stack, v) == isnonnil {
@@ -367,14 +327,6 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 		}
 	}
 
-	// visit visits reachable blocks of the CFG in dominance order,
-	// maintaining a stack of dominating nilness facts.
-	//
-	// By traversing the dom tree, we can pop facts off the stack as
-	// soon as we've visited a subtree.  Had we traversed the CFG,
-	// we would need to retain the set of facts for each block.
-	seen := make([]bool, len(fn.Blocks)) // seen[i] means visit should ignore block i
-	var visit func(b *ssa.BasicBlock, stack []fact)
 	visit = func(b *ssa.BasicBlock, stack []fact) {
 		if seen[b.Index] {
 			return
@@ -535,10 +487,6 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 		}
 	}
 
-	// Visit the entry block.  No need to visit fn.Recover.
-	if fn.Blocks == nil {
-		return
-	}
 	f := make([]fact, 0, 20)
 	pa := functionInfo{}
 	if fn.Object() != nil {
@@ -546,14 +494,14 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 	}
 	if len(pa.na) == 0 {
 		visit(fn.Blocks[0], f)
-		return
+		return nil
 	}
 	if len(fn.Params) == len(pa.na) {
 		for i, p := range fn.Params {
 			f = append(f, fact{p, pa.na[i]})
 		}
 		visit(fn.Blocks[0], f)
-		return
+		return nil
 	}
 	if len(pa.na)-len(fn.Params) != 1 {
 		panic("inconsistent arguments but not method closure")
@@ -564,6 +512,56 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 		f = append(f, fact{p, pa.na[i+1]})
 	}
 	visit(fn.Blocks[0], f)
+	return nil
+}
+
+func mergeNilnesses(na, carg []nilness) ([]nilness, bool) {
+	if len(na) != len(carg) {
+		panic("inconsistent arguments count")
+	}
+	if equal(na, carg) {
+		return na, false
+	}
+	nnn := make([]nilness, len(na))
+	for i := range na {
+		nnn[i] = merge(na[i], carg[i])
+	}
+	if equal(na, nnn) {
+		return nnn, false
+	}
+	return nnn, true
+}
+
+func equal(a, b []nilness) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func merge(a, b nilness) nilness {
+	if a*b == unknown || a != b {
+		return unknown
+	}
+	return a
+}
+
+func compressNilness(ns []nilness) nilness {
+	// ns should have at least 1 element here
+	// because if the count of arguments differs
+	// there should be receivers.
+	nv := ns[0]
+	for _, n := range ns {
+		if nv*n == unknown || nv != n {
+			return unknown
+		}
+	}
+	return nv
 }
 
 // A fact records that a block is dominated
