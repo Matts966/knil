@@ -91,6 +91,10 @@ type pkgDone struct{}
 
 func (*pkgDone) AFact() {}
 
+type alreadyReportedGlobal struct{}
+
+func (*alreadyReportedGlobal) AFact() {}
+
 // checkFunc checks all the function calls with nil
 // parameters and export their information as ObjectFact,
 // and returns functions whose fact is updated.
@@ -326,7 +330,19 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			return
 		}
 		reportf("nilderef", instr.Pos(), "nil dereference in "+descr)
+
 		// Only report root cause.
+
+		// Global is always with register operation
+		if u, ok := v.(*ssa.UnOp); ok {
+			// Global does not hold referrers
+			// so we export object facts.
+			if g, ok := u.X.(*ssa.Global); ok {
+				pass.ExportObjectFact(g.Object(), &alreadyReportedGlobal{})
+				return
+			}
+		}
+
 		vrs := v.Referrers()
 		for vrs != nil {
 			nvrs := make([]ssa.Instruction, 0, 16)
@@ -358,6 +374,24 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 
 		// Report nil dereferences.
 		for _, instr := range b.Instrs {
+			// Check if the operand is already reported
+			// Global and skip if it is.
+			var rands [10]*ssa.Value
+			ios:= instr.Operands(rands[:0])
+			if len(ios) > 0 {
+				// Checking the first operand is enough
+				// because we only have to check
+				// operatons with 1 operand.
+				if u, ok := (*ios[0]).(*ssa.UnOp); ok {
+					if g, ok := u.X.(*ssa.Global); ok {
+						f := &alreadyReportedGlobal{}
+						if pass.ImportObjectFact(g.Object(), f) {
+							continue
+						}
+					}
+				}
+			}
+
 			if _, ok := alreadyReported[instr]; ok {
 				continue
 			}
@@ -400,6 +434,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					}
 				}
 			case *ssa.FieldAddr:
+
 				notNil(stack, instr, instr.X, "field selection, "+instr.X.String()+" can be nil")
 			// Currently we do not support check for index operations
 			// because range for slice is not Range in SSA. Range in
