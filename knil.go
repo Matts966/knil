@@ -337,7 +337,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		if u, ok := v.(*ssa.UnOp); ok {
 			// Global does not hold referrers
 			// so we export object facts.
-			if g, ok := u.X.(*ssa.Global); ok {
+			if g, ok := u.X.(*ssa.Global); ok && g.Pkg.Pkg == pass.Pkg {
 				pass.ExportObjectFact(g.Object(), &alreadyReportedGlobal{})
 				return
 			}
