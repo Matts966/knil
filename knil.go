@@ -279,33 +279,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function) []*ssa.Function {
 	return updatedFunctions
 }
 
-func compareAndMerge(prev, now []nilness) ([]nilness, bool) {
-	if equal(prev, now) {
-		return prev, false
-	}
-	var longer, shorter []nilness
-	if len(prev) > len(now) {
-		longer = prev
-		shorter = now
-	} else {
-		longer = now
-		shorter = prev
-	}
-	new := make([]nilness, len(longer))
-	diff := len(longer) - len(shorter)
-	for i, l := range longer {
-		if i > diff-1 {
-			new[i] = merge(l, shorter[i-diff])
-		} else {
-			new[i] = l
-		}
-	}
-	if equal(prev, new) {
-		return prev, false
-	}
-	return new, true
-}
-
 func mergeNilnesses(na, carg []nilness) ([]nilness, bool) {
 	if len(na) != len(carg) {
 		panic("inconsistent arguments count")
@@ -582,7 +555,6 @@ func runFunc(pass *analysis.Pass, fn *ssa.Function, alreadyReported map[ssa.Inst
 		visit(fn.Blocks[0], f)
 		return
 	}
-	//print(len(pa.na), len(fn.Params))
 	if len(pa.na)-len(fn.Params) != 1 {
 		panic("inconsistent arguments but not method closure")
 	}
