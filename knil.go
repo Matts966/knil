@@ -111,16 +111,9 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		})
 	}
 
-	// visit visits reachable blocks of the CFG in dominance order,
-	// maintaining a stack of dominating nilness facts.
-	//
-	// By traversing the dom tree, we can pop facts off the stack as
-	// soon as we've visited a subtree.  Had we traversed the CFG,
-	// we would need to retain the set of facts for each block.
-	seen := make([]bool, len(fn.Blocks)) // seen[i] means visit should ignore block i
 	type visitor func(b *ssa.BasicBlock, stack []fact)
-	var visit visitor
-	prune := func(b *ssa.BasicBlock, stack []fact, v visitor) bool {
+
+	prune := func(b *ssa.BasicBlock, stack []fact, visit visitor) bool {
 		// For nil comparison blocks, report an error if the condition
 		// is degenerate, and push a nilness fact on the stack when
 		// visiting its true and false successor blocks.
@@ -157,7 +150,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					if d == skip && len(d.Preds) == 1 {
 						continue
 					}
-					v(d, stack)
+					visit(d, stack)
 				}
 				return true
 			}
@@ -187,7 +180,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 							s = append(s, f.negate())
 						}
 					}
-					v(d, s)
+					visit(d, s)
 				}
 				return true
 			}
@@ -195,6 +188,14 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		return false
 	}
 
+	// visit visits reachable blocks of the CFG in dominance order,
+	// maintaining a stack of dominating nilness facts.
+	//
+	// By traversing the dom tree, we can pop facts off the stack as
+	// soon as we've visited a subtree.  Had we traversed the CFG,
+	// we would need to retain the set of facts for each block.
+	seen := make([]bool, len(fn.Blocks)) // seen[i] means visit should ignore block i
+	var visit visitor
 	if onlyCheck {
 		// updatedFunctions stores functions whose fact is updated.
 		var updatedFunctions []*ssa.Function
