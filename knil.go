@@ -103,6 +103,14 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		return nil
 	}
 
+	reportf := func(category string, pos token.Pos, format string, args ...interface{}) {
+		pass.Report(analysis.Diagnostic{
+			Pos:      pos,
+			Category: category,
+			Message:  fmt.Sprintf(format, args...),
+		})
+	}
+
 	// visit visits reachable blocks of the CFG in dominance order,
 	// maintaining a stack of dominating nilness facts.
 	//
@@ -110,7 +118,83 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	// soon as we've visited a subtree.  Had we traversed the CFG,
 	// we would need to retain the set of facts for each block.
 	seen := make([]bool, len(fn.Blocks)) // seen[i] means visit should ignore block i
-	var visit func(b *ssa.BasicBlock, stack []fact)
+	type visitor func(b *ssa.BasicBlock, stack []fact)
+	var visit visitor
+	prune := func(b *ssa.BasicBlock, stack []fact, v visitor) bool {
+		// For nil comparison blocks, report an error if the condition
+		// is degenerate, and push a nilness fact on the stack when
+		// visiting its true and false successor blocks.
+		if binop, tsucc, fsucc := eq(b); binop != nil {
+			xnil := nilnessOf(stack, binop.X)
+			ynil := nilnessOf(stack, binop.Y)
+
+			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
+				if !onlyCheck {
+					// Degenerate condition:
+					// the nilness of both operands is known,
+					// and at least one of them is nil.
+					var adj string
+					if (xnil == ynil) == (binop.Op == token.EQL) {
+						adj = "tautological"
+					} else {
+						adj = "impossible"
+					}
+					reportf("cond", binop.Pos(), "%s condition: %s %s %s", adj, xnil, binop.Op, ynil)
+				}
+
+				// If tsucc's or fsucc's sole incoming edge is impossible,
+				// it is unreachable.  Prune traversal of it and
+				// all the blocks it dominates.
+				// (We could be more precise with full dataflow
+				// analysis of control-flow joins.)
+				var skip *ssa.BasicBlock
+				if xnil == ynil {
+					skip = fsucc
+				} else {
+					skip = tsucc
+				}
+				for _, d := range b.Dominees() {
+					if d == skip && len(d.Preds) == 1 {
+						continue
+					}
+					v(d, stack)
+				}
+				return true
+			}
+
+			// "if x == nil" or "if nil == y" condition; x, y are unknown.
+			if xnil == isnil || ynil == isnil {
+				var f fact
+				if xnil == isnil {
+					// x is nil, y is unknown:
+					// t successor learns y is nil.
+					f = fact{binop.Y, isnil}
+				} else {
+					// x is nil, y is unknown:
+					// t successor learns x is nil.
+					f = fact{binop.X, isnil}
+				}
+				for _, d := range b.Dominees() {
+					// Successor blocks learn a fact
+					// only at non-critical edges.
+					// (We could do be more precise with full dataflow
+					// analysis of control-flow joins.)
+					s := stack
+					if len(d.Preds) == 1 {
+						if d == tsucc {
+							s = append(s, f)
+						} else if d == fsucc {
+							s = append(s, f.negate())
+						}
+					}
+					v(d, s)
+				}
+				return true
+			}
+		}
+		return false
+	}
+
 	if onlyCheck {
 		// updatedFunctions stores functions whose fact is updated.
 		var updatedFunctions []*ssa.Function
@@ -218,63 +302,8 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 				}
 			}
 
-			// For nil comparison blocks, report an error if the condition
-			// is degenerate, and push a nilness fact on the stack when
-			// visiting its true and false successor blocks.
-			if binop, tsucc, fsucc := eq(b); binop != nil {
-				xnil := nilnessOf(stack, binop.X)
-				ynil := nilnessOf(stack, binop.Y)
-
-				if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
-					// If tsucc's or fsucc's sole incoming edge is impossible,
-					// it is unreachable.  Prune traversal of it and
-					// all the blocks it dominates.
-					// (We could be more precise with full dataflow
-					// analysis of control-flow joins.)
-					var skip *ssa.BasicBlock
-					if xnil == ynil {
-						skip = fsucc
-					} else {
-						skip = tsucc
-					}
-					for _, d := range b.Dominees() {
-						if d == skip && len(d.Preds) == 1 {
-							continue
-						}
-						visit(d, stack)
-					}
-					return
-				}
-
-				// "if x == nil" or "if nil == y" condition; x, y are unknown.
-				if xnil == isnil || ynil == isnil {
-					var f fact
-					if xnil == isnil {
-						// x is nil, y is unknown:
-						// t successor learns y is nil.
-						f = fact{binop.Y, isnil}
-					} else {
-						// x is nil, y is unknown:
-						// t successor learns x is nil.
-						f = fact{binop.X, isnil}
-					}
-					for _, d := range b.Dominees() {
-						// Successor blocks learn a fact
-						// only at non-critical edges.
-						// (We could do be more precise with full dataflow
-						// analysis of control-flow joins.)
-						s := stack
-						if len(d.Preds) == 1 {
-							if d == tsucc {
-								s = append(s, f)
-							} else if d == fsucc {
-								s = append(s, f.negate())
-							}
-						}
-						visit(d, s)
-					}
-					return
-				}
+			if prune(b, stack, visit) {
+				return
 			}
 
 			for _, d := range b.Dominees() {
@@ -290,13 +319,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 
 	// onlyCheck is false, emit diagnostics
 
-	reportf := func(category string, pos token.Pos, format string, args ...interface{}) {
-		pass.Report(analysis.Diagnostic{
-			Pos:      pos,
-			Category: category,
-			Message:  fmt.Sprintf(format, args...),
-		})
-	}
 	// notNil reports an error if v can be nil.
 	notNil := func(stack []fact, instr ssa.Instruction, v ssa.Value, descr string) {
 		if nilnessOf(stack, v) == isnonnil {
@@ -412,74 +434,8 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			}
 		}
 
-		// For nil comparison blocks, report an error if the condition
-		// is degenerate, and push a nilness fact on the stack when
-		// visiting its true and false successor blocks.
-		if binop, tsucc, fsucc := eq(b); binop != nil {
-			xnil := nilnessOf(stack, binop.X)
-			ynil := nilnessOf(stack, binop.Y)
-
-			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
-				// Degenerate condition:
-				// the nilness of both operands is known,
-				// and at least one of them is nil.
-				var adj string
-				if (xnil == ynil) == (binop.Op == token.EQL) {
-					adj = "tautological"
-				} else {
-					adj = "impossible"
-				}
-				reportf("cond", binop.Pos(), "%s condition: %s %s %s", adj, xnil, binop.Op, ynil)
-
-				// If tsucc's or fsucc's sole incoming edge is impossible,
-				// it is unreachable.  Prune traversal of it and
-				// all the blocks it dominates.
-				// (We could be more precise with full dataflow
-				// analysis of control-flow joins.)
-				var skip *ssa.BasicBlock
-				if xnil == ynil {
-					skip = fsucc
-				} else {
-					skip = tsucc
-				}
-				for _, d := range b.Dominees() {
-					if d == skip && len(d.Preds) == 1 {
-						continue
-					}
-					visit(d, stack)
-				}
-				return
-			}
-
-			// "if x == nil" or "if nil == y" condition; x, y are unknown.
-			if xnil == isnil || ynil == isnil {
-				var f fact
-				if xnil == isnil {
-					// x is nil, y is unknown:
-					// t successor learns y is nil.
-					f = fact{binop.Y, isnil}
-				} else {
-					// x is nil, y is unknown:
-					// t successor learns x is nil.
-					f = fact{binop.X, isnil}
-				}
-				for _, d := range b.Dominees() {
-					// Successor blocks learn a fact
-					// only at non-critical edges.
-					// (We could do be more precise with full dataflow
-					// analysis of control-flow joins.)
-					s := stack
-					if len(d.Preds) == 1 {
-						if d == tsucc {
-							s = append(s, f)
-						} else if d == fsucc {
-							s = append(s, f.negate())
-						}
-					}
-					visit(d, s)
-				}
-				return
-			}
+		if prune(b, stack, visit) {
+			return
 		}
 
 		for _, d := range b.Dominees() {
