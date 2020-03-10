@@ -12,7 +12,6 @@ import (
 	"go/token"
 	"go/types"
 	"math"
-	"regexp"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
@@ -30,8 +29,6 @@ var Analyzer = &analysis.Analyzer{
 	Requires: []*analysis.Analyzer{buildssa.Analyzer},
 }
 
-var ignoreFilesRegexp = `.*_test.go|zz_generated.*`
-
 func run(pass *analysis.Pass) (interface{}, error) {
 	ssainput := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
 	fns := setupMap(ssainput.SrcFuncs)
@@ -47,7 +44,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	}
 	pass.ExportPackageFact(&pkgDone{})
 	for _, fn := range ssainput.SrcFuncs {
-		if isIgnored(fn) {
+		if isIgnoredFunction(fn) {
 			continue
 		}
 		checkFunc(pass, fn, false, alreadyReported)
@@ -62,38 +59,6 @@ func setupMap(fs []*ssa.Function) map[*ssa.Function]struct{} {
 	}
 	return ret
 }
-
-func isIgnored(v *ssa.Function) bool {
-	m, err := regexp.MatchString(ignoreFilesRegexp, getFileName(v))
-	if err != nil {
-		panic(err)
-	}
-	return m
-}
-
-func getFileName(v *ssa.Function) string {
-	fs := v.Prog.Fset
-	return fs.File(v.Pos()).Name()
-}
-
-type functionInfo struct {
-	// na has the information about arguments which can be nil.
-	na   []nilness
-	nr   []nilness
-	rfvs []nilness
-}
-
-type receiverFreeVariables []nilness
-
-func (*functionInfo) AFact() {}
-
-type pkgDone struct{}
-
-func (*pkgDone) AFact() {}
-
-type alreadyReportedGlobal struct{}
-
-func (*alreadyReportedGlobal) AFact() {}
 
 // checkFunc checks all the function calls with nil
 // parameters and export their information as ObjectFact,
@@ -377,7 +342,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			// Check if the operand is already reported
 			// Global and skip if it is.
 			var rands [10]*ssa.Value
-			ios:= instr.Operands(rands[:0])
+			ios := instr.Operands(rands[:0])
 			if len(ios) > 0 {
 				// Checking the first operand is enough
 				// because we only have to check
