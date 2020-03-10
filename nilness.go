@@ -55,14 +55,14 @@ func compressNilness(ns []nilness) nilness {
 	return nv
 }
 
-// A fact records that a block is dominated
+// A nilnessOfValue records that a block is dominated
 // by the condition v == nil or v != nil.
-type fact struct {
+type nilnessOfValue struct {
 	value   ssa.Value
 	nilness nilness
 }
 
-func (f fact) negate() fact { return fact{f.value, -f.nilness} }
+func (f nilnessOfValue) negate() nilnessOfValue { return nilnessOfValue{f.value, -f.nilness} }
 
 type nilness int
 
@@ -76,7 +76,7 @@ var nilnessStrings = [...]string{"non-nil", "unknown", "nil"}
 
 func (n nilness) String() string { return nilnessStrings[n+1] }
 
-func nilnessesOf(stack []fact, vs []ssa.Value) []nilness {
+func nilnessesOf(stack []nilnessOfValue, vs []ssa.Value) []nilness {
 	ns := make([]nilness, len(vs))
 	for i, s := range vs {
 		ns[i] = nilnessOf(stack, s)
@@ -86,7 +86,7 @@ func nilnessesOf(stack []fact, vs []ssa.Value) []nilness {
 
 // nilnessOf reports whether v is definitely nil, definitely not nil,
 // or unknown given the dominating stack of facts.
-func nilnessOf(stack []fact, v ssa.Value) nilness {
+func nilnessOf(stack []nilnessOfValue, v ssa.Value) nilness {
 	// Is value intrinsically nil or non-nil?
 	switch v := v.(type) {
 	case *ssa.Alloc,

@@ -115,9 +115,9 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		})
 	}
 
-	type visitor func(b *ssa.BasicBlock, stack []fact)
+	type visitor func(b *ssa.BasicBlock, stack []nilnessOfValue)
 
-	prune := func(b *ssa.BasicBlock, stack []fact, visit visitor) bool {
+	prune := func(b *ssa.BasicBlock, stack []nilnessOfValue, visit visitor) bool {
 		// For nil comparison blocks, report an error if the condition
 		// is degenerate, and push a nilness fact on the stack when
 		// visiting its true and false successor blocks.
@@ -161,15 +161,15 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 
 			// "if x == nil" or "if nil == y" condition; x, y are unknown.
 			if xnil == isnil || ynil == isnil {
-				var f fact
+				var f nilnessOfValue
 				if xnil == isnil {
 					// x is nil, y is unknown:
 					// t successor learns y is nil.
-					f = fact{binop.Y, isnil}
+					f = nilnessOfValue{binop.Y, isnil}
 				} else {
 					// x is nil, y is unknown:
 					// t successor learns x is nil.
-					f = fact{binop.X, isnil}
+					f = nilnessOfValue{binop.X, isnil}
 				}
 				for _, d := range b.Dominees() {
 					// Successor blocks learn a fact
@@ -203,7 +203,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	if onlyCheck {
 		// updatedFunctions stores functions whose fact is updated.
 		var updatedFunctions []*ssa.Function
-		visit = func(b *ssa.BasicBlock, stack []fact) {
+		visit = func(b *ssa.BasicBlock, stack []nilnessOfValue) {
 			if seen[b.Index] {
 				return
 			}
@@ -245,7 +245,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 							continue
 						case 1:
 							if v, ok := instr.(ssa.Value); ok {
-								stack = append(stack, fact{v, fi.nr[0]})
+								stack = append(stack, nilnessOfValue{v, fi.nr[0]})
 							}
 							continue
 						default:
@@ -257,7 +257,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 								c := 0
 								for _, vr := range *vrs {
 									if e, ok := vr.(*ssa.Extract); ok {
-										stack = append(stack, fact{e, fi.nr[c]})
+										stack = append(stack, nilnessOfValue{e, fi.nr[c]})
 										c++
 									}
 								}
@@ -317,7 +317,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		}
 
 		// Visit the entry block.  No need to visit fn.Recover.
-		visit(fn.Blocks[0], make([]fact, 0, 20)) // 20 is plenty
+		visit(fn.Blocks[0], make([]nilnessOfValue, 0, 20)) // 20 is plenty
 
 		return updatedFunctions
 	}
@@ -325,7 +325,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	// onlyCheck is false, emit diagnostics
 
 	// notNil reports an error if v can be nil.
-	notNil := func(stack []fact, instr ssa.Instruction, v ssa.Value, descr string) {
+	notNil := func(stack []nilnessOfValue, instr ssa.Instruction, v ssa.Value, descr string) {
 		if nilnessOf(stack, v) == isnonnil {
 			return
 		}
@@ -366,7 +366,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		}
 	}
 
-	visit = func(b *ssa.BasicBlock, stack []fact) {
+	visit = func(b *ssa.BasicBlock, stack []nilnessOfValue) {
 		if seen[b.Index] {
 			return
 		}
@@ -421,14 +421,14 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					for _, vr := range *vrs {
 						switch i := vr.(type) {
 						case *ssa.Extract:
-							stack = append(stack, fact{i, fi.nr[c]})
+							stack = append(stack, nilnessOfValue{i, fi.nr[c]})
 							c++
 						// 1 value is returned.
 						case ssa.Value:
 							if len(fi.nr) != 1 {
 								panic("inconsistent return values count")
 							}
-							stack = append(stack, fact{v, fi.nr[0]})
+							stack = append(stack, nilnessOfValue{v, fi.nr[0]})
 							break
 						}
 					}
@@ -479,7 +479,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		}
 	}
 
-	f := make([]fact, 0, 20)
+	f := make([]nilnessOfValue, 0, 20)
 	pa := functionInfo{}
 	if fn.Object() != nil {
 		pass.ImportObjectFact(fn.Object(), &pa)
@@ -490,7 +490,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	}
 	if len(fn.Params) == len(pa.na) {
 		for i, p := range fn.Params {
-			f = append(f, fact{p, pa.na[i]})
+			f = append(f, nilnessOfValue{p, pa.na[i]})
 		}
 		visit(fn.Blocks[0], f)
 		return nil
@@ -499,11 +499,10 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		panic("inconsistent arguments but not method closure")
 	}
 	// There should be a receiver argument.
-	f = append(f, fact{fn.FreeVars[0], pa.na[0]})
+	f = append(f, nilnessOfValue{fn.FreeVars[0], pa.na[0]})
 	for i, p := range fn.Params {
-		f = append(f, fact{p, pa.na[i+1]})
+		f = append(f, nilnessOfValue{p, pa.na[i+1]})
 	}
 	visit(fn.Blocks[0], f)
 	return nil
 }
-
