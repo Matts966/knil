@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"go/types"
 	"math"
+	"unicode"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
@@ -177,6 +178,32 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			for _, instr := range b.Instrs {
 				switch instr := instr.(type) {
 				case *ssa.Return:
+					// Export nilness of unexported types
+					for _, r := range instr.Results {
+						td := types.Default(r.Type())
+
+						// Default types
+						if td != r.Type() {
+							continue
+						}
+
+						t := r.Type()
+						for t != nil {
+							var firstRune rune
+							for _, c := range t.String() {
+								firstRune = c
+								break
+							}
+
+							if unicode.IsUpper(firstRune) {
+								continue
+							}
+
+							// Unexported defined types
+							t = t.Underlying()
+						}
+					}
+
 					fi := functionInfo{}
 					if fn.Object() == nil {
 						continue
