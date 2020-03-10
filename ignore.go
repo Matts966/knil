@@ -1,5 +1,10 @@
 package knil
 
+// This file contains processes for ignoring files related to
+// dynamic analysis. We can ignore them because they are also
+// for making code safer and they do not run on production
+// environment.
+
 import (
 	"regexp"
 
