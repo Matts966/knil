@@ -435,7 +435,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 				}
 			case *ssa.FieldAddr:
 
-				notNil(stack, instr, instr.X, "field selection, "+instr.X.String()+" can be nil")
+				notNil(stack, instr, instr.X, "field selection")
 			// Currently we do not support check for index operations
 			// because range for slice is not Range in SSA. Range in
 			// SSA is only for map and string, and we can't distinguish
@@ -447,14 +447,14 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			// case *ssa.IndexAddr:
 			// 	notNil(stack, instr, instr.X, "index operation")
 			case *ssa.MapUpdate:
-				notNil(stack, instr, instr.Map, "map update, "+instr.Map.String()+" can be nil")
+				notNil(stack, instr, instr.Map, "map update")
 			case *ssa.Slice:
 				// A nilcheck occurs in ptr[:] iff ptr is a pointer to an array.
 				if _, ok := instr.X.Type().Underlying().(*types.Pointer); ok {
-					notNil(stack, instr, instr.X, "slice operation, "+instr.X.String()+" can be nil")
+					notNil(stack, instr, instr.X, "slice operation")
 				}
 			case *ssa.Store:
-				notNil(stack, instr, instr.Addr, "store, "+instr.Addr.String()+" can be nil")
+				notNil(stack, instr, instr.Addr, "store")
 			case *ssa.TypeAssert:
 				// Only the 1-result type assertion panics.
 				//
@@ -462,10 +462,10 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 				if instr.CommaOk {
 					continue
 				}
-				notNil(stack, instr, instr.X, "type assertion, "+instr.X.String()+" can be nil")
+				notNil(stack, instr, instr.X, "type assertion")
 			case *ssa.UnOp:
 				if instr.Op == token.MUL { // *X
-					notNil(stack, instr, instr.X, "load, "+instr.X.String()+" can be nil")
+					notNil(stack, instr, instr.X, "load")
 				}
 			}
 		}
