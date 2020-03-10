@@ -193,7 +193,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 				case ssa.CallInstruction:
 					c := instr.Common()
 					s := c.StaticCallee()
-					if s == nil || s.Object() == nil || s.Object().Exported() {
+					if s == nil || s.Object() == nil {
 						continue
 					}
 
