@@ -5,6 +5,7 @@
 package knil_test
 
 import (
+	"log"
 	"testing"
 
 	"github.com/Matts966/knil/analyzer/knil"
@@ -13,7 +14,10 @@ import (
 )
 
 func Test(t *testing.T) {
-	analysis.Validate([]*analysis.Analyzer{knil.Analyzer})
+	err := analysis.Validate([]*analysis.Analyzer{knil.Analyzer})
+	if err != nil {
+		log.Fatal(err)
+	}
 	testdata := analysistest.TestData()
 	analysistest.Run(t, testdata, knil.Analyzer, "nil")
 }

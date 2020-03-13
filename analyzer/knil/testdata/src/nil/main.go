@@ -173,3 +173,24 @@ func v() { // want v:"&{\\[\\] \\[\\] \\[\\]}"
 	// because global variable can be nil concurrently
 	keywords["OK"] = "OK" // do not want "nil dereference in map update" because already reported
 }
+
+// Main is an exported entrypoint
+func Main() {
+	f(nil, nil)
+	f2(nil, nil)
+	g()
+	f3()
+	h(nil, false)
+	i(nil)
+	j(nil)
+	k()
+	l(nil)
+	m()
+	n()
+	o()
+	p()
+	q()
+	r(nil)
+	sf(nil)
+	v()
+}

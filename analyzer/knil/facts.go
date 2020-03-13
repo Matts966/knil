@@ -4,6 +4,8 @@ type functionInfo struct {
 	// na has the information about arguments which can be nil.
 	na   []nilness
 	nr   []nilness
+
+	// Receiver free variables
 	rfvs []nilness
 }
 
