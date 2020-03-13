@@ -1,4 +1,4 @@
-module github.com/Matts966/knil
+module github.com/Matts966/knil/analyzer/knil
 
 go 1.12
 
