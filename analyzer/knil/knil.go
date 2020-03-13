@@ -82,7 +82,8 @@ func setupMap(fs []*ssa.Function) map[*ssa.Function]struct{} {
 // Diagnostics are emitted using the facts if onlyCheck is false.
 //
 func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyReported map[ssa.Instruction]struct{}) []*ssa.Function {
-	if fn.Blocks == nil {
+	bs := fn.Blocks
+	if bs == nil {
 		return nil
 	}
 
@@ -177,7 +178,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	// By traversing the dom tree, we can pop facts off the stack as
 	// soon as we've visited a subtree.  Had we traversed the CFG,
 	// we would need to retain the set of facts for each block.
-	seen := make([]bool, len(fn.Blocks)) // seen[i] means visit should ignore block i
+	seen := make([]bool, len(bs)) // seen[i] means visit should ignore block i
 	var visit visitor
 	if onlyCheck {
 		// updatedFunctions stores functions whose fact is updated.
@@ -296,7 +297,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		}
 
 		// Visit the entry block.  No need to visit fn.Recover.
-		visit(fn.Blocks[0], make([]nilnessOfValue, 0, 20)) // 20 is plenty
+		visit(bs[0], make([]nilnessOfValue, 0, 20)) // 20 is plenty
 
 		return updatedFunctions
 	}
@@ -464,14 +465,14 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		pass.ImportObjectFact(fn.Object(), &pa)
 	}
 	if len(pa.na) == 0 {
-		visit(fn.Blocks[0], f)
+		visit(bs[0], f)
 		return nil
 	}
 	if len(fn.Params) == len(pa.na) {
 		for i, p := range fn.Params {
 			f = append(f, nilnessOfValue{p, pa.na[i]})
 		}
-		visit(fn.Blocks[0], f)
+		visit(bs[0], f)
 		return nil
 	}
 	if len(pa.na)-len(fn.Params) != 1 {
@@ -482,6 +483,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	for i, p := range fn.Params {
 		f = append(f, nilnessOfValue{p, pa.na[i+1]})
 	}
-	visit(fn.Blocks[0], f)
+	visit(bs[0], f)
 	return nil
 }
