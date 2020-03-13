@@ -18,7 +18,3 @@ func (*pkgDone) AFact() {}
 type alreadyReportedGlobal struct{}
 
 func (*alreadyReportedGlobal) AFact() {}
-
-type returnedUnexportedTypes map[string]nilness
-
-func (*returnedUnexportedTypes) AFact() {}
