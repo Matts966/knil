@@ -7,7 +7,7 @@ package knil_test
 import (
 	"testing"
 
-	"github.com/Matts966/knil"
+	"github.com/Matts966/knil/analyzer/knil"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/analysistest"
 )
