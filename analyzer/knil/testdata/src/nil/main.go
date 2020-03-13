@@ -166,13 +166,6 @@ func T(i *int) { // want T:"&{\\[\\] \\[\\] \\[\\]}"
 	_ = *i // want "nil dereference in load"
 }
 
-// U is an exported method of s, but the s is not exported and
-// can be enumerated all the values in ssa.Return in exported
-// funtion and ssa.CallInstruction.
-func (v *s) U() { // want U:"&{\\[\\] \\[\\] \\[\\]}"
-	_ = *v
-}
-
 var keywords map[string]string // want keywords: "&{}"
 func v() { // want v:"&{\\[\\] \\[\\] \\[\\]}"
 	keywords = make(map[string]string)
