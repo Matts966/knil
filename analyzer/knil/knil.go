@@ -43,6 +43,10 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		}
 		fns = newfns
 	}
+	// TODO(Matts966): Create new driver to search all the imported packages.
+	// We should create it in the golang.org/x/tools because some required tools
+	// are in internal packages. Also we can't rely on facts of standard packages
+	// in some drivers such as Bazel and Blaze.
 	pass.ExportPackageFact(&pkgDone{})
 	for _, fn := range ssainput.SrcFuncs {
 		if isIgnoredFunction(fn) {
