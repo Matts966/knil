@@ -23,10 +23,10 @@ nil pointer dereference soundly
 `
 
 var Analyzer = &analysis.Analyzer{
-	Name:     "knil",
-	Doc:      doc,
-	Run:      run,
-	Requires: []*analysis.Analyzer{buildssa.Analyzer},
+	Name:      "knil",
+	Doc:       doc,
+	Run:       run,
+	Requires:  []*analysis.Analyzer{buildssa.Analyzer},
 	FactTypes: []analysis.Fact{new(functionInfo), new(pkgDone), new(alreadyReportedGlobal)},
 }
 
@@ -37,6 +37,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	for len(fns) > 0 {
 		newfns := make(map[*ssa.Function]struct{}, len(fns))
 		for fn := range fns {
+
+			// TODO(Matts966): handle these cases in the new driver.
+			if isIgnoredFunction(fn) {
+				continue
+			}
+
 			for _, f := range checkFunc(pass, fn, true, alreadyReported) {
 				newfns[f] = struct{}{}
 			}
@@ -49,9 +55,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	// in some drivers such as Bazel and Blaze.
 	pass.ExportPackageFact(&pkgDone{})
 	for _, fn := range ssainput.SrcFuncs {
+
+		// TODO(Matts966): handle these cases in the new driver.
 		if isIgnoredFunction(fn) {
 			continue
 		}
+
 		checkFunc(pass, fn, false, alreadyReported)
 	}
 	return nil, nil
