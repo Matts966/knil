@@ -27,6 +27,7 @@ var Analyzer = &analysis.Analyzer{
 	Doc:      doc,
 	Run:      run,
 	Requires: []*analysis.Analyzer{buildssa.Analyzer},
+	FactTypes: []analysis.Fact{new(functionInfo), new(pkgDone), new(alreadyReportedGlobal)},
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
