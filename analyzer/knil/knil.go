@@ -32,23 +32,27 @@ var Analyzer = &analysis.Analyzer{
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	ssainput := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
-	fns := setupMap(ssainput.SrcFuncs)
 	alreadyReported := make(map[ssa.Instruction]struct{})
-	for len(fns) > 0 {
-		newfns := make(map[*ssa.Function]struct{}, len(fns))
-		for fn := range fns {
+
+	for {
+		cc := 0
+		for _, fn := range ssainput.SrcFuncs {
 
 			// TODO(Matts966): handle these cases in the new driver.
 			if isIgnoredFunction(fn) {
 				continue
 			}
 
-			for _, f := range checkFunc(pass, fn, true, alreadyReported) {
-				newfns[f] = struct{}{}
+			if changed := checkFunc(pass, fn, false, alreadyReported); changed {
+				cc++
 			}
 		}
-		fns = newfns
+		if cc == 0 {
+			pass.ExportPackageFact(&pkgDone{})
+			break
+		}
 	}
+
 	// TODO(Matts966): Create new driver to search all the imported packages.
 	// We should create it in the golang.org/x/tools because some required tools
 	// are in internal packages. Also we can't rely on facts of standard packages
@@ -60,30 +64,21 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if isIgnoredFunction(fn) {
 			continue
 		}
-
-		checkFunc(pass, fn, false, alreadyReported)
+		checkFunc(pass, fn, true, alreadyReported)
 	}
 	return nil, nil
-}
-
-func setupMap(fs []*ssa.Function) map[*ssa.Function]struct{} {
-	ret := make(map[*ssa.Function]struct{}, len(fs))
-	for _, f := range fs {
-		ret[f] = struct{}{}
-	}
-	return ret
 }
 
 // checkFunc checks all the function calls with nil
 // parameters and export their information as ObjectFact,
 // and returns functions whose fact is updated.
-// If onlyCheck is true, checkFunc only checks functions and
+// If report is false, checkFunc only checks functions and
 // exports facts.
-// Diagnostics are emitted using the facts if onlyCheck is false.
+// Diagnostics are emitted using the facts if report is true.
 //
-func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyReported map[ssa.Instruction]struct{}) []*ssa.Function {
+func checkFunc(pass *analysis.Pass, fn *ssa.Function, report bool, alreadyReported map[ssa.Instruction]struct{}) bool {
 	if fn.Blocks == nil {
-		return nil
+		return false
 	}
 
 	reportf := func(category string, pos token.Pos, format string, args ...interface{}) {
@@ -105,7 +100,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			ynil := nilnessOf(stack, binop.Y)
 
 			if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
-				if !onlyCheck {
+				if report {
 					// Degenerate condition:
 					// the nilness of both operands is known,
 					// and at least one of them is nil.
@@ -179,136 +174,17 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	// we would need to retain the set of facts for each block.
 	seen := make([]bool, len(fn.Blocks)) // seen[i] means visit should ignore block i
 	var visit visitor
-	if onlyCheck {
-		// updatedFunctions stores functions whose fact is updated.
-		var updatedFunctions []*ssa.Function
-		visit = func(b *ssa.BasicBlock, stack []nilnessOfValue) {
-			if seen[b.Index] {
-				return
-			}
-			seen[b.Index] = true
-
-			for _, instr := range b.Instrs {
-				switch instr := instr.(type) {
-				case *ssa.Return:
-					fi := functionInfo{}
-					if fn.Object() == nil {
-						continue
-					}
-					pass.ImportObjectFact(fn.Object(), &fi)
-					if len(fi.nr) == 0 {
-						fi.nr = nilnessesOf(stack, instr.Results)
-						pass.ExportObjectFact(fn.Object(), &fi)
-						continue
-					}
-					fi.nr, _ = mergeNilnesses(fi.nr, nilnessesOf(stack, instr.Results))
-					pass.ExportObjectFact(fn.Object(), &fi)
-					continue
-				case ssa.CallInstruction:
-					c := instr.Common()
-					s := c.StaticCallee()
-					if s == nil || s.Object() == nil {
-						continue
-					}
-
-					f := s.Object()
-					if f.Pkg() != pass.Pkg {
-						if !pass.ImportPackageFact(f.Pkg(), &pkgDone{}) {
-							updatedFunctions = append(updatedFunctions, fn)
-							continue
-						}
-						fi := functionInfo{}
-						pass.ImportObjectFact(f, &fi)
-						switch len(fi.nr) {
-						case 0:
-							continue
-						case 1:
-							if v, ok := instr.(ssa.Value); ok {
-								stack = append(stack, nilnessOfValue{v, fi.nr[0]})
-							}
-							continue
-						default:
-							if v, ok := instr.(ssa.Value); ok {
-								vrs := v.Referrers()
-								if vrs == nil {
-									continue
-								}
-								c := 0
-								for _, vr := range *vrs {
-									if e, ok := vr.(*ssa.Extract); ok {
-										stack = append(stack, nilnessOfValue{e, fi.nr[c]})
-										c++
-									}
-								}
-							}
-							continue
-						}
-					}
-
-					fact := functionInfo{}
-					pass.ImportObjectFact(f, &fact)
-					if len(fact.na) == 0 && len(fact.rfvs) == 0 {
-						fact.na = nilnessesOf(stack, c.Args)
-						if len(s.FreeVars) > 0 {
-							// Assume the receiver arguments are the first elements of FreeVars.
-							fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
-						}
-						pass.ExportObjectFact(f, &fact)
-						if len(fact.na) != 0 || len(fact.rfvs) != 0 {
-							updatedFunctions = append(updatedFunctions, s)
-						}
-						continue
-					}
-					var updated bool
-					if len(fact.na) == len(c.Args) {
-						if len(fact.na) == 0 {
-							continue
-						}
-						fact.na, updated = mergeNilnesses(fact.na, nilnessesOf(stack, c.Args))
-						if len(s.FreeVars) > 0 {
-							fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
-						}
-					} else {
-						if math.Abs(float64(len(fact.na)-len(c.Args))) != 1 {
-							panic("inconsistent arguments but not method closure")
-						}
-						nnavwfv := nilnessesOf(stack, c.Args)
-						if len(fact.na) > len(c.Args) {
-							fact.na, updated = mergeNilnesses(fact.na, append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...))
-						} else {
-							fact.na, updated = mergeNilnesses(append([]nilness{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
-						}
-					}
-					if updated {
-						pass.ExportObjectFact(f, &fact)
-						updatedFunctions = append(updatedFunctions, s)
-					}
-				}
-			}
-
-			if prune(b, stack, visit) {
-				return
-			}
-
-			for _, d := range b.Dominees() {
-				visit(d, stack)
-			}
-		}
-
-		// Visit the entry block.  No need to visit fn.Recover.
-		visit(fn.Blocks[0], make([]nilnessOfValue, 0, 20)) // 20 is plenty
-
-		return updatedFunctions
-	}
-
-	// onlyCheck is false, emit diagnostics
-
+	// updatedFunctions stores functions whose fact is updated.
+	changed := false
 	// notNil reports an error if v can be nil.
 	notNil := func(stack []nilnessOfValue, instr ssa.Instruction, v ssa.Value, descr string) {
 		if nilnessOf(stack, v) == isnonnil {
 			return
 		}
-		reportf("nilderef", instr.Pos(), "nil dereference in "+descr)
+
+		if report {
+			reportf("nilderef", instr.Pos(), "nil dereference in "+descr)
+		}
 
 		// Only report root cause.
 
@@ -375,11 +251,33 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 				continue
 			}
 			switch instr := instr.(type) {
-			case ssa.CallInstruction:
-				notNil(stack, instr, instr.Common().Value,
-					instr.Common().Description())
+			case *ssa.Return:
+				if report {
+					continue
+				}
 
-				s := instr.Common().StaticCallee()
+				fi := functionInfo{}
+				if fn.Object() == nil {
+					continue
+				}
+
+				if fn.Name() == "eq" {
+					fmt.Println(instr.Results)
+				}
+
+				pass.ImportObjectFact(fn.Object(), &fi)
+				if len(fi.nr) == 0 {
+					fi.nr = nilnessesOf(stack, instr.Results)
+				} else {
+					fi.nr, _ = mergeNilnesses(fi.nr, nilnessesOf(stack, instr.Results))
+				}
+				pass.ExportObjectFact(fn.Object(), &fi)
+				continue
+			case ssa.CallInstruction:
+				c := instr.Common()
+				notNil(stack, instr, c.Value, c.Description())
+
+				s := c.StaticCallee()
 				if s == nil {
 					continue
 				}
@@ -411,6 +309,75 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 							break
 						}
 					}
+				}
+
+				if fo.Pkg() != pass.Pkg {
+					if !pass.ImportPackageFact(fo.Pkg(), &pkgDone{}) {
+						changed = true
+						continue
+					}
+					switch len(fi.nr) {
+					case 0:
+						continue
+					case 1:
+						if v, ok := instr.(ssa.Value); ok {
+							stack = append(stack, nilnessOfValue{v, fi.nr[0]})
+						}
+						continue
+					default:
+						if v, ok := instr.(ssa.Value); ok {
+							vrs := v.Referrers()
+							if vrs == nil {
+								continue
+							}
+							c := 0
+							for _, vr := range *vrs {
+								if e, ok := vr.(*ssa.Extract); ok {
+									stack = append(stack, nilnessOfValue{e, fi.nr[c]})
+									c++
+								}
+							}
+						}
+						continue
+					}
+				}
+
+				fact := functionInfo{}
+				pass.ImportObjectFact(fo, &fact)
+				if len(fact.na) == 0 && len(fact.rfvs) == 0 {
+					fact.na = nilnessesOf(stack, c.Args)
+					if len(s.FreeVars) > 0 {
+						// Assume the receiver arguments are the first elements of FreeVars.
+						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
+					}
+					pass.ExportObjectFact(fo, &fact)
+					if len(fact.na) != 0 || len(fact.rfvs) != 0 {
+						changed = true
+					}
+					continue
+				}
+
+				if len(fact.na) == len(c.Args) {
+					if len(fact.na) == 0 {
+						continue
+					}
+					fact.na, changed = mergeNilnesses(fact.na, nilnessesOf(stack, c.Args))
+					if len(s.FreeVars) > 0 {
+						fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
+					}
+				} else {
+					if math.Abs(float64(len(fact.na)-len(c.Args))) != 1 {
+						panic("inconsistent arguments but not method closure")
+					}
+					nnavwfv := nilnessesOf(stack, c.Args)
+					if len(fact.na) > len(c.Args) {
+						fact.na, changed = mergeNilnesses(fact.na, append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...))
+					} else {
+						fact.na, changed = mergeNilnesses(append([]nilness{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
+					}
+				}
+				if changed {
+					pass.ExportObjectFact(fo, &fact)
 				}
 			case *ssa.FieldAddr:
 
@@ -462,17 +429,22 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 	pa := functionInfo{}
 	if fn.Object() != nil {
 		pass.ImportObjectFact(fn.Object(), &pa)
+		// Don't have to check unexported
+		// and not called functions
+		if !fn.Object().Exported() && len(pa.na) == 0 {
+			return false
+		}
 	}
 	if len(pa.na) == 0 {
 		visit(fn.Blocks[0], f)
-		return nil
+		return changed
 	}
 	if len(fn.Params) == len(pa.na) {
 		for i, p := range fn.Params {
 			f = append(f, nilnessOfValue{p, pa.na[i]})
 		}
 		visit(fn.Blocks[0], f)
-		return nil
+		return changed
 	}
 	if len(pa.na)-len(fn.Params) != 1 {
 		panic("inconsistent arguments but not method closure")
@@ -483,5 +455,5 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		f = append(f, nilnessOfValue{p, pa.na[i+1]})
 	}
 	visit(fn.Blocks[0], f)
-	return nil
+	return changed
 }
