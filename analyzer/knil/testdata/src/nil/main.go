@@ -38,17 +38,17 @@ func f2(ptr *[3]int, i interface{}) { // want f2:"arguments: \\[\\], return valu
 	if ptr != nil {
 		print(ptr[:])
 		*ptr = [3]int{}
-		print(*ptr)
+		_ = *ptr
 	} else {
 		print(ptr[:])   // want "nil dereference in slice operation"
 		*ptr = [3]int{} // do not want "nil dereference in store" because root cause is ptr
-		print(*ptr)     // do not want "nil dereference in load" because root cause is ptr
+		_ = *ptr     	// do not want "nil dereference in load" because root cause is ptr
 
 		if ptr != nil { // want "impossible condition: nil != nil"
 			// Dominated by ptr==nil and ptr!=nil,
 			// this block is unreachable.
 			// We do not report errors within it.
-			print(*ptr)
+			_ = *ptr
 		}
 	}
 
