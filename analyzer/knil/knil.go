@@ -250,6 +250,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					pass.ImportObjectFact(f, &fact)
 					if len(fact.na) == 0 && len(fact.rfvs) == 0 {
 						fact.na = nilnessesOf(stack, c.Args)
+
 						if len(s.FreeVars) > 0 {
 							// Assume the receiver arguments are the first elements of FreeVars.
 							fact.rfvs = append(fact.rfvs, nilnessOf(stack, s.FreeVars[0]))
@@ -275,9 +276,9 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 						}
 						nnavwfv := nilnessesOf(stack, c.Args)
 						if len(fact.na) > len(c.Args) {
-							fact.na, updated = mergeNilnesses(fact.na, append([]nilness{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...))
+							fact.na, updated = mergeNilnesses(fact.na, append(nilnesses{nilnessOf(stack, s.FreeVars[0])}, nnavwfv...))
 						} else {
-							fact.na, updated = mergeNilnesses(append([]nilness{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
+							fact.na, updated = mergeNilnesses(append(nilnesses{compressNilness(fact.rfvs)}, fact.na...), nnavwfv)
 						}
 					}
 					if updated {

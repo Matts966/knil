@@ -6,14 +6,14 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
-func mergeNilnesses(na, carg []nilness) ([]nilness, bool) {
+func mergeNilnesses(na, carg nilnesses) (nilnesses, bool) {
 	if len(na) != len(carg) {
 		panic("inconsistent arguments count")
 	}
 	if equal(na, carg) {
 		return na, false
 	}
-	nnn := make([]nilness, len(na))
+	nnn := make(nilnesses, len(na))
 	for i := range na {
 		nnn[i] = merge(na[i], carg[i])
 	}
@@ -23,7 +23,7 @@ func mergeNilnesses(na, carg []nilness) ([]nilness, bool) {
 	return nnn, true
 }
 
-func equal(a, b []nilness) bool {
+func equal(a, b nilnesses) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -42,7 +42,7 @@ func merge(a, b nilness) nilness {
 	return a
 }
 
-func compressNilness(ns []nilness) nilness {
+func compressNilness(ns nilnesses) nilness {
 	// ns should have at least 1 element here
 	// because if the count of arguments differs
 	// there should be receivers.
@@ -66,6 +66,8 @@ func (f nilnessOfValue) negate() nilnessOfValue { return nilnessOfValue{f.value,
 
 type nilness int
 
+type nilnesses []nilness
+
 const (
 	isnonnil         = -1
 	unknown  nilness = 0
@@ -76,8 +78,8 @@ var nilnessStrings = [...]string{"non-nil", "unknown", "nil"}
 
 func (n nilness) String() string { return nilnessStrings[n+1] }
 
-func nilnessesOf(stack []nilnessOfValue, vs []ssa.Value) []nilness {
-	ns := make([]nilness, len(vs))
+func nilnessesOf(stack []nilnessOfValue, vs []ssa.Value) nilnesses {
+	ns := make(nilnesses, len(vs))
 	for i, s := range vs {
 		ns[i] = nilnessOf(stack, s)
 	}
