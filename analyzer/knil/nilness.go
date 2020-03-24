@@ -6,22 +6,49 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
-func mergeNilnesses(na, carg nilnesses) (nilnesses, bool) {
+func mergeNilnesses(na, carg nilnesses) nilnesses {
 	if len(na) != len(carg) {
 		panic("inconsistent arguments count")
 	}
 	if equal(na, carg) {
-		return na, false
+		return na
 	}
 	nnn := make(nilnesses, len(na))
 	for i := range na {
 		nnn[i] = merge(na[i], carg[i])
 	}
-	if equal(na, nnn) {
-		return nnn, false
-	}
-	return nnn, true
+	return nnn
 }
+
+func mergePosToNilnesses(ptns posToNilnesses) nilnesses {
+	if len(ptns) == 0 {
+		return nil
+	}
+	var rns nilnesses = nil
+	for _, ns := range ptns {
+		if rns == nil {
+			rns = ns
+		} else {
+			rns = mergeNilnesses(rns, ns)
+		}
+	}
+	return rns
+}
+
+// func mergePosToNilness(ptn posToNilness) nilness {
+// 	if len(ptn) == 0 {
+// 		return nil
+// 	}
+// 	var rn *nilness = nil
+// 	for _, n := range ptn {
+// 		if rn == nil {
+// 			rn = &n
+// 		} else {
+// 			rn = &merge(*rn, n)
+// 		}
+// 	}
+// 	return *rn
+// }
 
 func equal(a, b nilnesses) bool {
 	if len(a) != len(b) {
@@ -67,6 +94,18 @@ func (f nilnessOfValue) negate() nilnessOfValue { return nilnessOfValue{f.value,
 type nilness int
 
 type nilnesses []nilness
+
+// posToNilness holds nilness information
+// at a tokne.Pos.
+type posToNilness map[token.Pos]nilness
+type posToNilnesses map[token.Pos]nilnesses
+
+func (ptns posToNilnesses) length() int {
+	for _, ns := range ptns {
+		return len(ns)
+	}
+	return 0
+}
 
 const (
 	isnonnil         = -1

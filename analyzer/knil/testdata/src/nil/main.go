@@ -187,10 +187,10 @@ func v() { // want v:"arguments: \\[\\], return value: \\[\\], potential free va
 }
 
 func w(i *int) {
-	_ = *i
+	_ = *i // do not want "nil dereference in load" because the call of w is always with non-nil argument
 }
 func x2(i *int) { // want x2:"arguments: \\[non-nil\\], return value: \\[\\], potential free variable: \\[\\]"
-	w(i)
+	w(i) // do not want "nil dereference in load" because the call of x2 is always with non-nil argument
 }
 func y() { // want y:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
 	i := 3
