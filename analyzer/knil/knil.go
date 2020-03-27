@@ -37,18 +37,15 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	for true {
 		updated := false
 		for _, fn := range ssainput.SrcFuncs {
-
 			// TODO(Matts966): ignore these cases in the new driver.
 			if isIgnoredFunction(fn) {
 				continue
 			}
 
 			if checkFunc(pass, fn, true, alreadyReported) {
-				fmt.Println(fn)
 				fi := functionInfo{}
 				if fn.Object() != nil {
 					pass.ImportObjectFact(fn.Object(), &fi)
-					fmt.Println(fi)
 				}
 
 				updated = true
@@ -181,6 +178,34 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		return false
 	}
 
+	generateStackFromKnownFacts := func(fo types.Object) []nilnessOfValue {
+		pa := functionInfo{}
+		stack := make([]nilnessOfValue, 0, 20) // 20 is plenty
+		if fo != nil {
+			pass.ImportObjectFact(fo, &pa)
+		}
+		if pa.na.length() == 0 {
+			return stack
+		}
+		if len(fn.Params) == pa.na.length() {
+			merged := mergePosToNilnesses(pa.na)
+			for i, p := range fn.Params {
+				stack = append(stack, nilnessOfValue{p, merged[i]})
+			}
+			return stack
+		}
+		if pa.na.length()-len(fn.Params) != 1 {
+			panic("inconsistent arguments but not method closure")
+		}
+		// There should be a receiver argument.
+		merged := mergePosToNilnesses(pa.na)
+		stack = append(stack, nilnessOfValue{fn.FreeVars[0], merged[0]})
+		for i, p := range fn.Params {
+			stack = append(stack, nilnessOfValue{p, merged[i+1]})
+		}
+		return stack
+	}
+
 	// visit visits reachable blocks of the CFG in dominance order,
 	// maintaining a stack of dominating nilness facts.
 	//
@@ -211,7 +236,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 							continue
 						}
 						updated = true
-						fmt.Println(1)
 						fi.nr = make(posToNilnesses)
 						fi.nr[instr.Pos()] = rns
 						pass.ExportObjectFact(fn.Object(), &fi)
@@ -221,10 +245,8 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 						if reflect.DeepEqual(ns, rns) {
 							continue
 						}
-						fmt.Println(ns, rns)
 					}
 					updated = true
-					fmt.Println(2)
 					fi.nr[instr.Pos()] = rns
 					pass.ExportObjectFact(fn.Object(), &fi)
 					continue
@@ -239,7 +261,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					if f.Pkg() != pass.Pkg {
 						if !pass.ImportPackageFact(f.Pkg(), &pkgDone{}) {
 							updated = true
-							fmt.Println(3)
 							continue
 						}
 						fi := functionInfo{}
@@ -283,7 +304,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 						}
 						if len(fact.na) != 0 || len(fact.rfv) != 0 {
 							updated = true
-							fmt.Println(4)
 							pass.ExportObjectFact(f, &fact)
 						}
 						continue
@@ -302,15 +322,12 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 										continue
 									}
 									updated = true
-									fmt.Println(5)
 									fact.rfv[instr.Pos()] = nilnessOf(stack, s.FreeVars[0])
 									pass.ExportObjectFact(f, &fact)
 									continue
 								}
 							}
-							fmt.Println(na, nilnessesOf(stack, c.Args))
 							updated = true
-							fmt.Println(6)
 							fact.na[instr.Pos()] = nilnessesOf(stack, c.Args)
 							if len(s.FreeVars) > 0 {
 								fact.rfv[instr.Pos()] = nilnessOf(stack, s.FreeVars[0])
@@ -319,10 +336,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 							continue
 						}
 						updated = true
-						fmt.Println(7)
 						fact.na[instr.Pos()] = nilnessesOf(stack, c.Args)
-
-						fmt.Println(fact)
 
 						if len(s.FreeVars) > 0 {
 							fact.rfv[instr.Pos()] = nilnessOf(stack, s.FreeVars[0])
@@ -333,8 +347,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					if math.Abs(float64(fact.na.length()-len(c.Args))) != 1 {
 						panic("inconsistent arguments but not method closure")
 					}
-					
-					fmt.Println(8)
+
 					newFact := fact
 					nnavwfv := nilnessesOf(stack, c.Args)
 					if fact.na.length() > len(c.Args) {
@@ -349,7 +362,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 						continue
 					}
 					updated = true
-					fmt.Println(instr.Pos(), nnavwfv, fact)
 					pass.ExportObjectFact(f, &fact)
 				}
 			}
@@ -363,9 +375,10 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			}
 		}
 
-		// Visit the entry block.  No need to visit fn.Recover.
-		visit(bs[0], make([]nilnessOfValue, 0, 20)) // 20 is plenty
+		stack := generateStackFromKnownFacts(fn.Object())
 
+		// Visit the entry block.  No need to visit fn.Recover.
+		visit(bs[0], stack)
 		return updated
 	}
 
@@ -527,32 +540,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		}
 	}
 
-	stack := make([]nilnessOfValue, 0, 20)
-	pa := functionInfo{}
-	if fn.Object() != nil {
-		pass.ImportObjectFact(fn.Object(), &pa)
-	}
-	if pa.na.length() == 0 {
-		visit(bs[0], stack)
-		return false
-	}
-	if len(fn.Params) == pa.na.length() {
-		merged := mergePosToNilnesses(pa.na)
-		for i, p := range fn.Params {
-			stack = append(stack, nilnessOfValue{p, merged[i]})
-		}
-		visit(bs[0], stack)
-		return false
-	}
-	if pa.na.length()-len(fn.Params) != 1 {
-		panic("inconsistent arguments but not method closure")
-	}
-	// There should be a receiver argument.
-	merged := mergePosToNilnesses(pa.na)
-	stack = append(stack, nilnessOfValue{fn.FreeVars[0], merged[0]})
-	for i, p := range fn.Params {
-		stack = append(stack, nilnessOfValue{p, merged[i+1]})
-	}
+	stack := generateStackFromKnownFacts(fn.Object())
 	visit(bs[0], stack)
 	return false
 }

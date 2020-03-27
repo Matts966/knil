@@ -7,7 +7,7 @@ import (
 
 type x struct{ f, g int }
 
-func f(x, y *x) { // want f:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func f(x, y *x) {
 	if x == nil {
 		print(x.f) // want "nil dereference in field selection"
 	} else {
@@ -34,7 +34,7 @@ func f(x, y *x) { // want f:"arguments: \\[\\], return value: \\[\\], potential 
 	}
 }
 
-func f2(ptr *[3]int, i interface{}) { // want f2:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func f2(ptr *[3]int, i interface{}) {
 	if ptr != nil {
 		print(ptr[:])
 		*ptr = [3]int{}
@@ -59,14 +59,14 @@ func f2(ptr *[3]int, i interface{}) { // want f2:"arguments: \\[\\], return valu
 	}
 }
 
-func g() error { // want g:"arguments: \\[\\], return value: \\[unknown\\], potential free variable: \\[\\]"
+func g() error { // want g:"arguments: map\\[[0-9]+:\\[\\]\\], return value: map\\[[0-9]+:\\[nil\\] [0-9]+:\\[unknown\\]\\], potential free variable: map\\[\\]"
 	if rand.Intn(10) > 5 {
 		return nil
 	}
 	return fmt.Errorf("error")
 }
 
-func f3() error { // want f3:"arguments: \\[\\], return value: \\[unknown\\], potential free variable: \\[\\]"
+func f3() error { // want f3:"arguments: map\\[\\], return value: map\\[[0-9]+:\\[non-nil\\] [0-9]+:\\[nil\\]\\], potential free variable: map\\[\\]"
 	err := g()
 	if err != nil {
 		return err
@@ -84,7 +84,7 @@ func f3() error { // want f3:"arguments: \\[\\], return value: \\[unknown\\], po
 	return nil
 }
 
-func h(err error, b bool) { // want h:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func h(err error, b bool) {
 	if err != nil && b {
 		return
 	} else if err != nil {
@@ -92,7 +92,7 @@ func h(err error, b bool) { // want h:"arguments: \\[\\], return value: \\[\\], 
 	}
 }
 
-func i(x *int) error { // want i:"arguments: \\[nil\\], return value: \\[non-nil\\], potential free variable: \\[\\]"
+func i(x *int) error { // want i:"arguments: map\\[[0-9]+:\\[nil\\]\\], return value: map\\[[0-9]+:\\[non-nil\\]\\], potential free variable: map\\[\\]"
 	_ = *x // want "nil dereference in load"
 	i(nil)
 	for {
@@ -102,28 +102,28 @@ func i(x *int) error { // want i:"arguments: \\[nil\\], return value: \\[non-nil
 	}
 }
 
-func j(x *int) { // want j:"arguments: \\[non-nil\\], return value: \\[\\], potential free variable: \\[\\]"
+func j(x *int) { // want j:"arguments: map\\[[0-9]+:\\[non-nil\\] [0-9]+:\\[non-nil\\]\\], return value: map\\[\\], potential free variable: map\\[\\]"
 	_ = *x
 }
 
-func k() { // want k:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func k() {
 	x := 0
 	j(&x)
 	x = 100
 	j(&x)
 }
 
-func l(x *int) { // want l:"arguments: \\[unknown\\], return value: \\[\\], potential free variable: \\[\\]"
+func l(x *int) { // want l:"arguments: map\\[[0-9]+:\\[non-nil\\] [0-9]+:\\[nil\\]\\], return value: map\\[\\], potential free variable: map\\[\\]"
 	_ = *x // want "nil dereference in load"
 }
 
-func m() { // want m:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func m() {
 	x := 0
 	l(&x)
 	l(nil)
 }
 
-func n() { // want n:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func n() {
 	var x interface{}
 	_, _ = x.(error)
 	_ = x.(error) // want "nil dereference in type assertion"
@@ -131,13 +131,13 @@ func n() { // want n:"arguments: \\[\\], return value: \\[\\], potential free va
 
 type s struct{}
 
-func (v *s) m1() { // want m1:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[non-nil\\]"
+func (v *s) m1() { // want m1:"arguments: map\\[[0-9]+:\\[\\]\\], return value: map\\[\\], potential free variable: map\\[[0-9]+:non-nil\\]"
 	_ = *v // want "nil dereference in load"
 }
-func (v *s) m2() { // want m2:"arguments: \\[unknown\\], return value: \\[\\], potential free variable: \\[\\]"
+func (v *s) m2() { // want m2:"arguments: map\\[[0-9]+:\\[non-nil\\] [0-9]+:\\[nil\\] [0-9]+:\\[non-nil\\] [0-9]+:\\[non-nil\\]\\], return value: map\\[\\], potential free variable: map\\[\\]"
 	_ = *v // want "nil dereference in load"
 }
-func o() { // want o:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func o() {
 	s1 := s{}
 	m1 := s1.m1
 	var s2 *s
@@ -152,47 +152,47 @@ func o() { // want o:"arguments: \\[\\], return value: \\[\\], potential free va
 	m2()
 }
 
-func p() *int { // want p:"arguments: \\[\\], return value: \\[non-nil\\], potential free variable: \\[\\]"
+func p() *int { // want p:"arguments: map\\[[0-9]+:\\[\\]\\], return value: map\\[[0-9]+:\\[non-nil\\]\\], potential free variable: map\\[\\]"
 	_ = *q() // want "nil dereference in load"
 	x := 5
 	return &x
 }
 
-func q() *int { // want q:"arguments: \\[\\], return value: \\[nil\\], potential free variable: \\[\\]"
+func q() *int { // want q:"arguments: map\\[[0-9]+:\\[\\]\\], return value: map\\[[0-9]+:\\[nil\\]\\], potential free variable: map\\[\\]"
 	_ = *p()
 	return nil
 }
 
-func r(i *int) { // want r:"arguments: \\[unknown\\], return value: \\[\\], potential free variable: \\[\\]"
+func r(i *int) { // want r:"arguments: map\\[[0-9]+:\\[unknown\\]\\], return value: map\\[\\], potential free variable: map\\[\\]"
 	// TODO(Matts966): do not emit here because we already reported in sf.
 	_ = *i // want "nil dereference in load"
 }
-func sf(i *int) { // want sf:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func sf(i *int) {
 	_ = *i // want "nil dereference in load"
 	r(i)
 }
 
 // T is an exported function and should care about the nilness
 // of arguments.
-func T(i *int) { // want T:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func T(i *int) {
 	_ = *i // want "nil dereference in load"
 }
 
 var keywords map[string]string // want keywords: "already reported global"
-func v() { // want v:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func v() {
 	keywords = make(map[string]string)
 	keywords["OK"] = "OK" // want "nil dereference in map update"
 	// because global variable can be nil concurrently
 	keywords["OK"] = "OK" // do not want "nil dereference in map update" because already reported
 }
 
-func w(i *int) {
+func w(i *int) { // want w:"arguments: map\\[[0-9]+:\\[non-nil\\]\\], return value: map\\[\\], potential free variable: map\\[\\]"
 	_ = *i // do not want "nil dereference in load" because the call of w is always with non-nil argument
 }
-func x2(i *int) { // want x2:"arguments: \\[non-nil\\], return value: \\[\\], potential free variable: \\[\\]"
+func x2(i *int) { // want x2:"arguments: map\\[[0-9]+:\\[non-nil\\]\\], return value: map\\[\\], potential free variable: map\\[\\]"
 	w(i) // do not want "nil dereference in load" because the call of x2 is always with non-nil argument
 }
-func y() { // want y:"arguments: \\[\\], return value: \\[\\], potential free variable: \\[\\]"
+func y() {
 	i := 3
 	x2(&i)
 }
