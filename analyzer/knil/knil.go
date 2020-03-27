@@ -72,14 +72,6 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func setupMap(fs []*ssa.Function) map[*ssa.Function]struct{} {
-	ret := make(map[*ssa.Function]struct{}, len(fs))
-	for _, f := range fs {
-		ret[f] = struct{}{}
-	}
-	return ret
-}
-
 // checkFunc checks all the function calls with nil
 // parameters and export their information as ObjectFact,
 // and returns whether the fact is updated.
@@ -256,7 +248,6 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					if s == nil || s.Object() == nil {
 						continue
 					}
-
 					f := s.Object()
 					if f.Pkg() != pass.Pkg {
 						if !pass.ImportPackageFact(f.Pkg(), &pkgDone{}) {
@@ -495,8 +486,8 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 					}
 				}
 			case *ssa.FieldAddr:
-
 				notNil(stack, instr, instr.X, "field selection")
+
 			// Currently we do not support check for index operations
 			// because range for slice is not Range in SSA. Range in
 			// SSA is only for map and string, and we can't distinguish
@@ -507,6 +498,7 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			//
 			// case *ssa.IndexAddr:
 			// 	notNil(stack, instr, instr.X, "index operation")
+
 			case *ssa.MapUpdate:
 				notNil(stack, instr, instr.Map, "map update")
 			case *ssa.Slice:

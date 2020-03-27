@@ -35,21 +35,6 @@ func mergePosToNilnesses(ptns posToNilnesses) nilnesses {
 	return rns
 }
 
-// func mergePosToNilness(ptn posToNilness) nilness {
-// 	if len(ptn) == 0 {
-// 		return nil
-// 	}
-// 	var rn *nilness = nil
-// 	for _, n := range ptn {
-// 		if rn == nil {
-// 			rn = &n
-// 		} else {
-// 			rn = &merge(*rn, n)
-// 		}
-// 	}
-// 	return *rn
-// }
-
 func equal(a, b nilnesses) bool {
 	if len(a) != len(b) {
 		return false
