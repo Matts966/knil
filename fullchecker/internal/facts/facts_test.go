@@ -13,8 +13,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/Matts966/knil/fullchecker/internal/internal/facts"
-	"github.com/Matts966/knil/fullchecker/internal/internal/testenv"
+	"github.com/Matts966/knil/fullchecker/internal/facts"
+	"github.com/Matts966/knil/fullchecker/internal/testenv"
 	"golang.org/x/tools/go/analysis/analysistest"
 	"golang.org/x/tools/go/packages"
 )

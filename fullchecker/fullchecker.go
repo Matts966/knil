@@ -30,8 +30,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Matts966/knil/fullchecker/internal/internal/analysisflags"
-	"github.com/Matts966/knil/fullchecker/internal/internal/checker"
+	"github.com/Matts966/knil/fullchecker/internal/analysisflags"
+	"github.com/Matts966/knil/fullchecker/internal/checker"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/unitchecker"
 )

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Matts966/knil/fullchecker/internal/internal/checker"
-	"github.com/Matts966/knil/fullchecker/internal/internal/testenv"
+	"github.com/Matts966/knil/fullchecker/internal/checker"
+	"github.com/Matts966/knil/fullchecker/internal/testenv"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/analysistest"
 	"golang.org/x/tools/go/analysis/passes/inspect"

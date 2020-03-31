@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Matts966/knil/fullchecker/internal/internal/analysisflags"
+	"github.com/Matts966/knil/fullchecker/internal/analysisflags"
 	"golang.org/x/tools/go/analysis"
 )
 

@@ -29,9 +29,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Matts966/knil/fullchecker/internal/internal/analysisflags"
-	"github.com/Matts966/knil/fullchecker/internal/internal/analysisinternal"
-	"github.com/Matts966/knil/fullchecker/internal/internal/span"
+	"github.com/Matts966/knil/fullchecker/internal/analysisflags"
+	"github.com/Matts966/knil/fullchecker/internal/analysisinternal"
+	"github.com/Matts966/knil/fullchecker/internal/span"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/packages"
 )
