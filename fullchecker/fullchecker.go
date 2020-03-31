@@ -21,7 +21,7 @@
 //
 // 	func main() { singlechecker.Main(findbadness.Analyzer) }
 //
-package singlechecker
+package fullchecker
 
 import (
 	"flag"

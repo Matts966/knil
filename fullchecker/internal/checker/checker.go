@@ -424,9 +424,7 @@ func printDiagnostics(roots []*action) (exitcode int) {
 		tree := make(analysisflags.JSONTree)
 		print = func(act *action) {
 			var diags []analysis.Diagnostic
-			if act.isroot {
-				diags = act.diagnostics
-			}
+			diags = act.diagnostics
 			tree.Add(act.pkg.Fset, act.pkg.ID, act.a.Name, diags, act.err)
 		}
 		visitAll(roots)
@@ -451,21 +449,19 @@ func printDiagnostics(roots []*action) (exitcode int) {
 				exitcode = 1 // analysis failed, at least partially
 				return
 			}
-			if act.isroot {
-				for _, diag := range act.diagnostics {
-					// We don't display a.Name/f.Category
-					// as most users don't care.
+			for _, diag := range act.diagnostics {
+				// We don't display a.Name/f.Category
+				// as most users don't care.
 
-					posn := act.pkg.Fset.Position(diag.Pos)
-					end := act.pkg.Fset.Position(diag.End)
-					k := key{posn, end, act.a, diag.Message}
-					if seen[k] {
-						continue // duplicate
-					}
-					seen[k] = true
-
-					analysisflags.PrintPlain(act.pkg.Fset, diag)
+				posn := act.pkg.Fset.Position(diag.Pos)
+				end := act.pkg.Fset.Position(diag.End)
+				k := key{posn, end, act.a, diag.Message}
+				if seen[k] {
+					continue // duplicate
 				}
+				seen[k] = true
+
+				analysisflags.PrintPlain(act.pkg.Fset, diag)
 			}
 		}
 		visitAll(roots)
