@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/Matts966/knil/analyzer/knil"
-	"github.com/Matts966/knil/fullchecker"
+	"golang.org/x/tools/go/analysis/singlechecker"
 )
 
-func main() { fullchecker.Main(knil.Analyzer) }
+func main() { singlechecker.Main(knil.Analyzer) }
