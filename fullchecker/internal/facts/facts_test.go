@@ -13,10 +13,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Matts966/knil/fullchecker/internal/internal/facts"
+	"github.com/Matts966/knil/fullchecker/internal/internal/testenv"
 	"golang.org/x/tools/go/analysis/analysistest"
-	"golang.org/x/tools/go/analysis/internal/facts"
 	"golang.org/x/tools/go/packages"
-	"golang.org/x/tools/internal/testenv"
 )
 
 type myFact struct {

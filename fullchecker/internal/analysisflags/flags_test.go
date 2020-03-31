@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Matts966/knil/fullchecker/internal/internal/analysisflags"
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/analysis/internal/analysisflags"
 )
 
 func main() {

@@ -29,11 +29,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Matts966/knil/fullchecker/internal/internal/analysisflags"
+	"github.com/Matts966/knil/fullchecker/internal/internal/analysisinternal"
+	"github.com/Matts966/knil/fullchecker/internal/internal/span"
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/analysis/internal/analysisflags"
 	"golang.org/x/tools/go/packages"
-	"golang.org/x/tools/internal/analysisinternal"
-	"golang.org/x/tools/internal/span"
 )
 
 var (
