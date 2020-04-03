@@ -13,6 +13,7 @@ import (
 	"go/types"
 	"math"
 	"reflect"
+	"unicode"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
@@ -170,27 +171,20 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		return false
 	}
 
-	generateStackFromKnownFacts := func(fo types.Object) []nilnessOfValue {
-		pa := functionInfo{}
+	generateStackFromKnownFacts := func(ptns posToNilnesses) []nilnessOfValue {
 		stack := make([]nilnessOfValue, 0, 20) // 20 is plenty
-		if fo != nil {
-			pass.ImportObjectFact(fo, &pa)
-		}
-		if pa.na.length() == 0 {
-			return stack
-		}
-		if len(fn.Params) == pa.na.length() {
-			merged := mergePosToNilnesses(pa.na)
+		if len(fn.Params) == ptns.length() {
+			merged := mergePosToNilnesses(ptns)
 			for i, p := range fn.Params {
 				stack = append(stack, nilnessOfValue{p, merged[i]})
 			}
 			return stack
 		}
-		if pa.na.length()-len(fn.Params) != 1 {
+		if ptns.length()-len(fn.Params) != 1 {
 			panic("inconsistent arguments but not method closure")
 		}
 		// There should be a receiver argument.
-		merged := mergePosToNilnesses(pa.na)
+		merged := mergePosToNilnesses(ptns)
 		stack = append(stack, nilnessOfValue{fn.FreeVars[0], merged[0]})
 		for i, p := range fn.Params {
 			stack = append(stack, nilnessOfValue{p, merged[i+1]})
@@ -366,9 +360,19 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 			}
 		}
 
-		stack := generateStackFromKnownFacts(fn.Object())
-
 		// Visit the entry block.  No need to visit fn.Recover.
+		fo := fn.Object()
+		if fo == nil {
+			visit(bs[0], nil)
+			return updated
+		}
+		pa := functionInfo{}
+		pass.ImportObjectFact(fo, &pa)
+		if pa.na.length() == 0 {
+			visit(bs[0], nil)
+			return updated
+		}
+		stack := generateStackFromKnownFacts(pa.na)
 		visit(bs[0], stack)
 		return updated
 	}
@@ -532,7 +536,33 @@ func checkFunc(pass *analysis.Pass, fn *ssa.Function, onlyCheck bool, alreadyRep
 		}
 	}
 
-	stack := generateStackFromKnownFacts(fn.Object())
+	// Visit the entry block.  No need to visit fn.Recover.
+	fo := fn.Object()
+	if fo == nil {
+		visit(bs[0], nil)
+		return false
+	}
+	pa := functionInfo{}
+	pass.ImportObjectFact(fo, &pa)
+	if pa.na.length() == 0 {
+		// TODO(Matts966): Ignore not only unexported but also exported but not called functions.
+		// TODO(Matts966): Add an option to always check exported functions.
+		if isExported(fo.Name()) {
+			visit(bs[0], nil)
+		}
+		// Do not check not called unexported functions.
+		return false
+	}
+	stack := generateStackFromKnownFacts(pa.na)
 	visit(bs[0], stack)
+	return false
+}
+
+func isExported(fn string) bool {
+	for _, f := range fn {
+		if unicode.IsUpper(f) {
+			return true
+		}
+	}
 	return false
 }

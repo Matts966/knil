@@ -3,6 +3,7 @@ module github.com/Matts966/knil
 go 1.14
 
 require (
+	github.com/Matts966/nilarg v0.0.0-20190924014907-ede697b9baca // indirect
 	golang.org/x/mod v0.2.0
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
 	golang.org/x/tools v0.0.0-20200331025713-a30bf2db82d4

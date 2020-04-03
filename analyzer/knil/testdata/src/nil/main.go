@@ -196,3 +196,8 @@ func y() {
 	i := 3
 	x2(&i)
 }
+
+func nilMain() {
+	f(nil, nil)
+	f2(nil, nil)
+}
