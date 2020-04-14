@@ -11,18 +11,359 @@ import (
 	"fmt"
 	"go/token"
 	"go/types"
+	"log"
 	"math"
 	"reflect"
+	"sync"
 	"unicode"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
+	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/ssa"
 )
 
 const doc = `check for redundant or impossible nil comparisons completely and
 nil pointer dereference soundly
 `
+
+// Main is the entrypoint for the analysis based on pointer analysis.
+func Main(cg *callgraph.Graph) {
+	passes := make([]*pass, len(cg.Root.Out))
+	wg := &sync.WaitGroup{}
+	for i, o := range cg.Root.Out {
+		wg.Add(1)
+		passes[i] = &pass{
+			errs:  make([]*errorInfo, 0, 32),
+			calls: make(callResults),
+		}
+		go analyzeNode(passes[i], wg, o.Callee)
+	}
+	wg.Wait()
+	for _, pass := range passes {
+		for _, err := range pass.errs {
+			log.Println(err)
+		}
+	}
+}
+
+type pass struct {
+	errs  []*errorInfo
+	calls callResults
+}
+
+type errorInfo struct {
+	stack []*callgraph.Edge
+	err   error
+}
+
+type callResults = map[call]*result
+
+type call struct {
+	id   int
+	args string
+}
+
+type result struct {
+	ret nilnesses
+	err error
+}
+
+func (e *errorInfo) String() string {
+	info := e.err.Error() + "\n"
+	for _, s := range e.stack {
+		info += s.Description() + "\n"
+	}
+	return info
+}
+
+func encodeCallInfo(n *callgraph.Node, args nilnesses) *call {
+	return &call{
+		id:   n.ID,
+		args: fmt.Sprint(args),
+	}
+}
+
+func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
+	var isError func(*callgraph.Node) error
+	callStack := make([]*callgraph.Edge, 0, 32)
+	var call func(n *callgraph.Node, args nilnesses) *result
+	call = func(n *callgraph.Node, args nilnesses) *result {
+		ci := *encodeCallInfo(n, args)
+		if ret, ok := p.calls[ci]; ok {
+			return ret
+		}
+
+		// ここから例
+		// append error
+		if err := isError(n); err != nil {
+			p.errs = append(p.errs, &errorInfo{
+				stack: callStack,
+				err:   err,
+			})
+			p.calls[ci] = &result{
+				ret: nil,
+				err: err,
+			}
+			return p.calls[ci]
+		}
+
+		// call
+		for _, e := range n.Out {
+			callStack = append(callStack, e) // push
+			call(e.Callee)
+			callStack = callStack[:len(callStack)-1] // pop
+		}
+
+		p.calls[ci] = &result{
+			ret: ret,
+			err: nil,
+		}
+		return p.calls[ci]
+		// ここまで例
+
+		type visitor func(b *ssa.BasicBlock, stack []nilnessOfValue)
+		prune := func(b *ssa.BasicBlock, stack []nilnessOfValue, visit visitor) bool {
+			// For nil comparison blocks, report an error if the condition
+			// is degenerate, and push a nilness fact on the stack when
+			// visiting its true and false successor blocks.
+			if binop, tsucc, fsucc := eq(b); binop != nil {
+				xnil := nilnessOf(stack, binop.X)
+				ynil := nilnessOf(stack, binop.Y)
+
+				if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
+					// Degenerate condition:
+					// the nilness of both operands is known,
+					// and at least one of them is nil.
+					var adj string
+					if (xnil == ynil) == (binop.Op == token.EQL) {
+						adj = "tautological"
+					} else {
+						adj = "impossible"
+					}
+					// Only append error because it can not cause actual error
+					p.errs = append(p.errs, &errorInfo{
+						stack: nil,
+						// TODO(Matts966): also repost pos
+						err: fmt.Errorf(adj),
+					})
+
+					// If tsucc's or fsucc's sole incoming edge is impossible,
+					// it is unreachable.  Prune traversal of it and
+					// all the blocks it dominates.
+					// (We could be more precise with full dataflow
+					// analysis of control-flow joins.)
+					var skip *ssa.BasicBlock
+					if xnil == ynil {
+						skip = fsucc
+					} else {
+						skip = tsucc
+					}
+					for _, d := range b.Dominees() {
+						if d == skip && len(d.Preds) == 1 {
+							continue
+						}
+						visit(d, stack)
+					}
+					return true
+				}
+
+				// "if x == nil" or "if nil == y" condition; x, y are unknown.
+				if xnil == isnil || ynil == isnil {
+					var f nilnessOfValue
+					if xnil == isnil {
+						// x is nil, y is unknown:
+						// t successor learns y is nil.
+						f = nilnessOfValue{binop.Y, isnil}
+					} else {
+						// x is nil, y is unknown:
+						// t successor learns x is nil.
+						f = nilnessOfValue{binop.X, isnil}
+					}
+					for _, d := range b.Dominees() {
+						// Successor blocks learn a fact
+						// only at non-critical edges.
+						// (We could do be more precise with full dataflow
+						// analysis of control-flow joins.)
+						s := stack
+						if len(d.Preds) == 1 {
+							if d == tsucc {
+								s = append(s, f)
+							} else if d == fsucc {
+								s = append(s, f.negate())
+							}
+						}
+						visit(d, s)
+					}
+					return true
+				}
+			}
+			return false
+		}
+
+		generateStackFromKnownFacts := func(ptns posToNilnesses) []nilnessOfValue {
+			stack := make([]nilnessOfValue, 0, 20) // 20 is plenty
+			if len(n.Func.Params) == ptns.length() {
+				merged := mergePosToNilnesses(ptns)
+				for i, p := range n.Func.Params {
+					stack = append(stack, nilnessOfValue{p, merged[i]})
+				}
+				return stack
+			}
+			if ptns.length()-len(n.Func.Params) != 1 {
+				panic("inconsistent arguments but not method closure")
+			}
+			// There should be a receiver argument.
+			merged := mergePosToNilnesses(ptns)
+			stack = append(stack, nilnessOfValue{n.Func.FreeVars[0], merged[0]})
+			for i, p := range n.Func.Params {
+				stack = append(stack, nilnessOfValue{p, merged[i+1]})
+			}
+			return stack
+		}
+
+		// visit visits reachable blocks of the CFG in dominance order,
+		// maintaining a stack of dominating nilness facts.
+		//
+		// By traversing the dom tree, we can pop facts off the stack as
+		// soon as we've visited a subtree.  Had we traversed the CFG,
+		// we would need to retain the set of facts for each block.
+		seen := make([]bool, len(n.Func.Blocks)) // seen[i] means visit should ignore block i
+		var visit visitor
+		visit = func(b *ssa.BasicBlock, stack []nilnessOfValue) {
+			if seen[b.Index] {
+				return
+			}
+			seen[b.Index] = true
+
+			// Report nil dereferences.
+			for _, instr := range b.Instrs {
+				// // Check if the operand is already reported
+				// // Global and skip if it is.
+				// var rands [10]*ssa.Value
+				// ios := instr.Operands(rands[:0])
+				// if len(ios) > 0 {
+				// 	// Checking the first operand is enough
+				// 	// because we only have to check
+				// 	// operatons with 1 operand.
+				// 	if u, ok := (*ios[0]).(*ssa.UnOp); ok {
+				// 		if g, ok := u.X.(*ssa.Global); ok {
+				// 			f := &alreadyReportedGlobal{}
+				// 			if pass.ImportObjectFact(g.Object(), f) {
+				// 				continue
+				// 			}
+				// 		}
+				// 	}
+				// }
+
+				// if _, ok := alreadyReported[instr]; ok {
+				// 	continue
+				// }
+
+				switch instr := instr.(type) {
+				case ssa.CallInstruction:
+					notNil(stack, instr, instr.Common().Value,
+						instr.Common().Description())
+
+					s := instr.Common().StaticCallee()
+					if s == nil {
+						continue
+					}
+					fo := s.Object()
+					if fo == nil {
+						continue
+					}
+
+					fi := functionInfo{}
+					pass.ImportObjectFact(fo, &fi)
+
+					if v, ok := instr.(ssa.Value); ok && fi.nr.length() > 0 {
+						vrs := v.Referrers()
+						if vrs == nil {
+							continue
+						}
+						c := 0
+						merged := mergePosToNilnesses(fi.nr)
+						for _, vr := range *vrs {
+							switch i := vr.(type) {
+							case *ssa.Extract:
+								stack = append(stack, nilnessOfValue{i, merged[c]})
+								c++
+							// 1 value is returned.
+							case ssa.Value:
+								if fi.nr.length() != 1 {
+									panic("inconsistent return values count")
+								}
+								stack = append(stack, nilnessOfValue{v, merged[0]})
+								break
+							}
+						}
+					}
+				case *ssa.FieldAddr:
+					notNil(stack, instr, instr.X, "field selection")
+
+				// Currently we do not support check for index operations
+				// because range for slice is not Range in SSA. Range in
+				// SSA is only for map and string, and we can't distinguish
+				// range based addressing, which is safe, and naive
+				// addressing for nil, which cause an error. Also the error
+				// is index out of range, not nil pointer dereference,
+				//  even if the slice operand is nil.
+				//
+				// case *ssa.IndexAddr:
+				// 	notNil(stack, instr, instr.X, "index operation")
+
+				case *ssa.MapUpdate:
+					notNil(stack, instr, instr.Map, "map update")
+				case *ssa.Slice:
+					// A nilcheck occurs in ptr[:] iff ptr is a pointer to an array.
+					if _, ok := instr.X.Type().Underlying().(*types.Pointer); ok {
+						notNil(stack, instr, instr.X, "slice operation")
+					}
+				case *ssa.Store:
+					notNil(stack, instr, instr.Addr, "store")
+				case *ssa.TypeAssert:
+					// Only the 1-result type assertion panics.
+					//
+					// _ = fp.(someType)
+					if instr.CommaOk {
+						continue
+					}
+					notNil(stack, instr, instr.X, "type assertion")
+				case *ssa.UnOp:
+					if instr.Op == token.MUL { // *X
+						notNil(stack, instr, instr.X, "load")
+					}
+				}
+			}
+
+			if prune(b, stack, visit) {
+				return
+			}
+
+			for _, d := range b.Dominees() {
+				visit(d, stack)
+			}
+		}
+
+		// Visit the entry block.  No need to visit fn.Recover.
+		if len(args) == 0 {
+			// TODO(Matts966): Ignore not only unexported but also exported but not called functions.
+			// TODO(Matts966): Add an option to always check exported functions.
+			if isExported(fo.Name()) {
+				visit(bs[0], nil)
+			}
+			// Do not check not called unexported functions.
+			return false
+		}
+		stack := generateStackFromKnownFacts(pa.na)
+		visit(n.Func.Blocks[0], stack)
+	}
+
+	call(n, nilnesses{})
+
+	wg.Done()
+}
 
 var Analyzer = &analysis.Analyzer{
 	Name:      "knil",

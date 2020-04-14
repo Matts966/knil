@@ -32,8 +32,13 @@ import (
 	"github.com/Matts966/knil/fullchecker/internal/analysisflags"
 	"github.com/Matts966/knil/fullchecker/internal/analysisinternal"
 	"github.com/Matts966/knil/fullchecker/internal/span"
+	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/pointer"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 var (
@@ -164,7 +169,51 @@ func load(patterns []string, allSyntax bool) ([]*packages.Package, error) {
 		}
 	}
 
+	// Create and build SSA-form program representation.
+	prog, pkgs := ssautil.AllPackages(initial, 0)
+	prog.Build()
+	mains, err := mainPackages(pkgs)
+	if err != nil {
+		return nil, err
+	}
+	config := &pointer.Config{
+		Mains:          mains,
+		BuildCallGraph: true,
+	}
+	result, err := pointer.Analyze(config)
+	// spew.Dump(result.CallGraph)
+	// fmt.Println("Nodes: ", result.CallGraph.Nodes)
+	// fmt.Println("Root", result.CallGraph.Root.Func.Name())
+	// Find edges originating from the main package.
+	// By converting to strings, we de-duplicate nodes
+	// representing the same function due to context sensitivity.
+	callgraph.GraphVisitEdges(result.CallGraph, func(edge *callgraph.Edge) error {
+		if !types.AssignableTo(edge.Callee.Func.Type(), edge.Callee.Func.Type()) {
+			os.Exit(1)
+		}
+		return nil
+	})
+	callgraph.CalleesOf()
+	spew.Dump("IN: ", result.CallGraph.Root.In)
+	spew.Dump("OUT: ", result.CallGraph.Root.Out)
+	os.Exit(1)
+
 	return initial, err
+}
+
+// mainPackages returns the main packages to analyze.
+// Each resulting package is named "main" and has a main function.
+func mainPackages(pkgs []*ssa.Package) ([]*ssa.Package, error) {
+	var mains []*ssa.Package
+	for _, p := range pkgs {
+		if p != nil && p.Pkg.Name() == "main" && p.Func("main") != nil {
+			mains = append(mains, p)
+		}
+	}
+	if len(mains) == 0 {
+		return nil, fmt.Errorf("no main packages")
+	}
+	return mains, nil
 }
 
 // TestAnalyzer applies an analysis to a set of packages (and their
