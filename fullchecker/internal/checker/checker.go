@@ -32,7 +32,6 @@ import (
 	"github.com/Matts966/knil/fullchecker/internal/analysisflags"
 	"github.com/Matts966/knil/fullchecker/internal/analysisinternal"
 	"github.com/Matts966/knil/fullchecker/internal/span"
-	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/packages"
@@ -193,10 +192,6 @@ func load(patterns []string, allSyntax bool) ([]*packages.Package, error) {
 		}
 		return nil
 	})
-	callgraph.CalleesOf()
-	spew.Dump("IN: ", result.CallGraph.Root.In)
-	spew.Dump("OUT: ", result.CallGraph.Root.Out)
-	os.Exit(1)
 
 	return initial, err
 }

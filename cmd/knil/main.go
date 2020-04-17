@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -15,12 +14,7 @@ import (
 )
 
 func main() {
-	args := flag.Args()
-	if len(args) == 0 {
-		os.Exit(1)
-	}
-
-	initial, err := load(args, true)
+	initial, err := load(os.Args, true)
 	if err != nil {
 		log.Fatal(err) // load errors
 	}
@@ -37,6 +31,9 @@ func main() {
 		BuildCallGraph: true,
 	}
 	result, err := pointer.Analyze(config)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	knil.Main(result.CallGraph)
 }
@@ -67,7 +64,7 @@ func load(patterns []string, allSyntax bool) ([]*packages.Package, error) {
 		Tests: true,
 	}
 	initial, err := packages.Load(&conf, patterns...)
-	if err == nil {
+	if err != nil {
 		if n := packages.PrintErrors(initial); n > 1 {
 			err = fmt.Errorf("%d errors during loading", n)
 		} else if n == 1 {

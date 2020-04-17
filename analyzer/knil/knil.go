@@ -57,7 +57,7 @@ type errorInfo struct {
 	err   error
 }
 
-type callResults = map[call]*result
+type callResults = map[call][]*result
 
 type call struct {
 	id   int
@@ -84,43 +84,43 @@ func encodeCallInfo(n *callgraph.Node, args nilnesses) *call {
 	}
 }
 
+func possibleEdges(n *callgraph.Node, s *types.Signature) []*callgraph.Edge {
+	pc := make([]*callgraph.Edge, 0, 4)
+	for _, e := range n.Out {
+		if types.AssignableTo(e.Callee.Func.Signature, s) {
+			pc = append(pc, e)
+		}
+	}
+	return pc
+}
+
 func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
-	var isError func(*callgraph.Node) error
 	callStack := make([]*callgraph.Edge, 0, 32)
-	var call func(n *callgraph.Node, args nilnesses) *result
-	call = func(n *callgraph.Node, args nilnesses) *result {
+	var call func(n *callgraph.Node, args nilnesses, cs []*callgraph.Edge) []*result
+	call = func(n *callgraph.Node, args nilnesses, cs []*callgraph.Edge) []*result {
 		ci := *encodeCallInfo(n, args)
 		if ret, ok := p.calls[ci]; ok {
 			return ret
 		}
 
-		// ここから例
-		// append error
-		if err := isError(n); err != nil {
+		notNil := func(stack []nilnessOfValue, instr ssa.Instruction, v ssa.Value, descr string) bool {
+			if nilnessOf(stack, v) == isnonnil {
+				return true
+			}
+			err := fmt.Errorf("nil dereference in " + descr)
+
 			p.errs = append(p.errs, &errorInfo{
 				stack: callStack,
 				err:   err,
 			})
-			p.calls[ci] = &result{
+
+			p.calls[ci] = append(p.calls[ci], &result{
 				ret: nil,
 				err: err,
-			}
-			return p.calls[ci]
-		}
+			})
 
-		// call
-		for _, e := range n.Out {
-			callStack = append(callStack, e) // push
-			call(e.Callee)
-			callStack = callStack[:len(callStack)-1] // pop
+			return false
 		}
-
-		p.calls[ci] = &result{
-			ret: ret,
-			err: nil,
-		}
-		return p.calls[ci]
-		// ここまで例
 
 		type visitor func(b *ssa.BasicBlock, stack []nilnessOfValue)
 		prune := func(b *ssa.BasicBlock, stack []nilnessOfValue, visit visitor) bool {
@@ -132,21 +132,25 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 				ynil := nilnessOf(stack, binop.Y)
 
 				if ynil != unknown && xnil != unknown && (xnil == isnil || ynil == isnil) {
+
+					// Skip appending errors because this analysis searches all
+					// possible call graph.
+					//
 					// Degenerate condition:
 					// the nilness of both operands is known,
 					// and at least one of them is nil.
-					var adj string
-					if (xnil == ynil) == (binop.Op == token.EQL) {
-						adj = "tautological"
-					} else {
-						adj = "impossible"
-					}
-					// Only append error because it can not cause actual error
-					p.errs = append(p.errs, &errorInfo{
-						stack: nil,
-						// TODO(Matts966): also repost pos
-						err: fmt.Errorf(adj),
-					})
+					// var adj string
+					// if (xnil == ynil) == (binop.Op == token.EQL) {
+					// 	adj = "tautological"
+					// } else {
+					// 	adj = "impossible"
+					// }
+					// // Only append error because it can not cause actual error
+					// p.errs = append(p.errs, &errorInfo{
+					// 	stack: nil,
+					// 	// TODO(Matts966): also repost pos
+					// 	err: fmt.Errorf(adj),
+					// })
 
 					// If tsucc's or fsucc's sole incoming edge is impossible,
 					// it is unreachable.  Prune traversal of it and
@@ -201,27 +205,6 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 			return false
 		}
 
-		generateStackFromKnownFacts := func(ptns posToNilnesses) []nilnessOfValue {
-			stack := make([]nilnessOfValue, 0, 20) // 20 is plenty
-			if len(n.Func.Params) == ptns.length() {
-				merged := mergePosToNilnesses(ptns)
-				for i, p := range n.Func.Params {
-					stack = append(stack, nilnessOfValue{p, merged[i]})
-				}
-				return stack
-			}
-			if ptns.length()-len(n.Func.Params) != 1 {
-				panic("inconsistent arguments but not method closure")
-			}
-			// There should be a receiver argument.
-			merged := mergePosToNilnesses(ptns)
-			stack = append(stack, nilnessOfValue{n.Func.FreeVars[0], merged[0]})
-			for i, p := range n.Func.Params {
-				stack = append(stack, nilnessOfValue{p, merged[i+1]})
-			}
-			return stack
-		}
-
 		// visit visits reachable blocks of the CFG in dominance order,
 		// maintaining a stack of dominating nilness facts.
 		//
@@ -238,60 +221,45 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 
 			// Report nil dereferences.
 			for _, instr := range b.Instrs {
-				// // Check if the operand is already reported
-				// // Global and skip if it is.
-				// var rands [10]*ssa.Value
-				// ios := instr.Operands(rands[:0])
-				// if len(ios) > 0 {
-				// 	// Checking the first operand is enough
-				// 	// because we only have to check
-				// 	// operatons with 1 operand.
-				// 	if u, ok := (*ios[0]).(*ssa.UnOp); ok {
-				// 		if g, ok := u.X.(*ssa.Global); ok {
-				// 			f := &alreadyReportedGlobal{}
-				// 			if pass.ImportObjectFact(g.Object(), f) {
-				// 				continue
-				// 			}
-				// 		}
-				// 	}
-				// }
-
-				// if _, ok := alreadyReported[instr]; ok {
-				// 	continue
-				// }
-
 				switch instr := instr.(type) {
 				case ssa.CallInstruction:
-					notNil(stack, instr, instr.Common().Value,
-						instr.Common().Description())
+					c := instr.Common()
+					notNil(stack, instr, c.Value, c.Description())
 
-					s := instr.Common().StaticCallee()
-					if s == nil {
-						continue
+					// TODO(Matts966): handle bound and partially applied methods
+					results := make([]*result, 0, 20)
+					for _, e := range possibleEdges(n, c.Signature()) {
+						callStack = append(callStack, e) // push
+						results = append(results, call(n, nilnessesOf(stack, c.Args), callStack)...)
+						callStack = callStack[:len(callStack)-1] // pop
 					}
-					fo := s.Object()
-					if fo == nil {
-						continue
-					}
 
-					fi := functionInfo{}
-					pass.ImportObjectFact(fo, &fi)
-
-					if v, ok := instr.(ssa.Value); ok && fi.nr.length() > 0 {
+					if v, ok := instr.(ssa.Value); ok {
 						vrs := v.Referrers()
 						if vrs == nil {
 							continue
 						}
-						c := 0
-						merged := mergePosToNilnesses(fi.nr)
-						for _, vr := range *vrs {
+						var merged nilnesses = nil
+						for _, r := range results {
+							if r.ret != nil {
+								if merged == nil {
+									merged = r.ret
+								} else {
+									merged = mergeNilnesses(merged, r.ret)
+								}
+							}
+						}
+						if merged == nil {
+							continue
+						}
+						for c, vr := range *vrs {
 							switch i := vr.(type) {
 							case *ssa.Extract:
 								stack = append(stack, nilnessOfValue{i, merged[c]})
 								c++
 							// 1 value is returned.
 							case ssa.Value:
-								if fi.nr.length() != 1 {
+								if len(merged) != 1 {
 									panic("inconsistent return values count")
 								}
 								stack = append(stack, nilnessOfValue{v, merged[0]})
@@ -299,6 +267,11 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 							}
 						}
 					}
+				case *ssa.Return:
+					p.calls[ci] = append(p.calls[ci], &result{
+						ret: nilnessesOf(stack, instr.Results),
+						err: nil,
+					})
 				case *ssa.FieldAddr:
 					notNil(stack, instr, instr.X, "field selection")
 
@@ -346,21 +319,39 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 			}
 		}
 
-		// Visit the entry block.  No need to visit fn.Recover.
-		if len(args) == 0 {
-			// TODO(Matts966): Ignore not only unexported but also exported but not called functions.
-			// TODO(Matts966): Add an option to always check exported functions.
-			if isExported(fo.Name()) {
-				visit(bs[0], nil)
+
+		// TODO(Matts966): Handle method closure (partially applied receiver)
+		stack := make([]nilnessOfValue, 0, 20) // 20 is plenty
+		if len(n.Func.Params) == len(args) {
+			for i, p := range n.Func.Params {
+				stack = append(stack, nilnessOfValue{p, args[i]})
 			}
-			// Do not check not called unexported functions.
-			return false
+		} else {
+			// if len(n.Func.Params)-len(args) != 1 {
+			// 	panic("inconsistent arguments but not method closure")
+			// }
+			// // There should be a receiver argument.
+			// merged := mergePosToNilnesses(ptns)
+			// stack = append(stack, nilnessOfValue{fn.FreeVars[0], merged[0]})
+
+			// for i, p := range n.Func.Params[1:] {
+			// 	stack = append(stack, nilnessOfValue{p, args[i]})
+			// }
 		}
-		stack := generateStackFromKnownFacts(pa.na)
+
 		visit(n.Func.Blocks[0], stack)
+
+		if _, ok := p.calls[ci]; !ok {
+			p.calls[ci] = append(p.calls[ci], &result{
+				ret: nil,
+				err: nil,
+			})
+		}
+
+		return p.calls[ci]
 	}
 
-	call(n, nilnesses{})
+	call(n, nilnesses{}, callStack)
 
 	wg.Done()
 }
