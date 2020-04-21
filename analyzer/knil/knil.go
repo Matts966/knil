@@ -71,7 +71,7 @@ type result struct {
 func (e *errorInfo) String() string {
 	info := e.err.Error() + "\n"
 	for _, s := range e.stack {
-		info += s.Description() + "\n"
+		info += s.Caller.Func.Name() + "->\n"
 	}
 	return info
 }
