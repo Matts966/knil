@@ -53,6 +53,7 @@ type pass struct {
 
 type errorInfo struct {
 	stack []*callgraph.Edge
+	pos   token.Pos
 	err   error
 }
 
@@ -73,6 +74,20 @@ func (e *errorInfo) String() string {
 	for _, s := range e.stack {
 		info += s.Caller.Func.Name() + "->\n"
 	}
+
+	fun := e.stack[len(e.stack)-1].Callee.Func
+	name := fun.Name()
+	f := e.stack[len(e.stack)-1].Callee.Func.Prog.Fset.File(e.pos)
+	if f != nil {
+		path, line, col, err := position(f, e.pos)
+		if err != nil {
+			panic(err)
+		}
+		info += fmt.Sprintf("%s:%d:%d: the problem is here\n", path, line, col)
+	} else {
+		info += fmt.Sprintf("file that %s belongs to not found\n", name)
+	}
+
 	return info
 }
 
@@ -93,6 +108,34 @@ func possibleEdges(n *callgraph.Node, s *types.Signature) []*callgraph.Edge {
 	return pc
 }
 
+// that it does not panic on invalid positions.
+func offset(f *token.File, pos token.Pos) (int, error) {
+	if int(pos) < f.Base() || int(pos) > f.Base()+f.Size() {
+		return 0, fmt.Errorf("invalid pos")
+	}
+	return int(pos) - f.Base(), nil
+}
+
+func position(f *token.File, pos token.Pos) (string, int, int, error) {
+	off, err := offset(f, pos)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return positionFromOffset(f, off)
+}
+
+func positionFromOffset(f *token.File, offset int) (string, int, int, error) {
+	if offset > f.Size() {
+		return "", 0, 0, fmt.Errorf("offset %v is past the end of the file %v", offset, f.Size())
+	}
+	pos := f.Pos(offset)
+	p := f.Position(pos)
+	if offset == f.Size() {
+		return p.Filename, p.Line + 1, 1, nil
+	}
+	return p.Filename, p.Line, p.Column, nil
+}
+
 func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 	var call func(n *callgraph.Node, args nilnesses, cs []*callgraph.Edge) []*result
 	call = func(n *callgraph.Node, args nilnesses, cs []*callgraph.Edge) []*result {
@@ -100,6 +143,11 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 		if ret, ok := p.calls[ci]; ok {
 			return ret
 		}
+		// TODO(Matts966): check if this handling is correct.
+		p.calls[ci] = []*result{{
+			ret: nil,
+			err: nil,
+		}}
 
 		notNil := func(stack []nilnessOfValue, instr ssa.Instruction, v ssa.Value, descr string) bool {
 			if nilnessOf(stack, v) == isnonnil {
@@ -109,6 +157,7 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 
 			p.errs = append(p.errs, &errorInfo{
 				stack: cs,
+				pos:   instr.Pos(),
 				err:   err,
 			})
 
@@ -334,6 +383,14 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 			// for i, p := range n.Func.Params[1:] {
 			// 	stack = append(stack, nilnessOfValue{p, args[i]})
 			// }
+		}
+
+		if len(n.Func.Blocks) == 0 {
+			p.calls[ci] = append(p.calls[ci], &result{
+				ret: nil,
+				err: nil,
+			})
+			return p.calls[ci]
 		}
 
 		visit(n.Func.Blocks[0], stack)
