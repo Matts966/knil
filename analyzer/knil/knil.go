@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"go/token"
 	"go/types"
-	"log"
 	"math"
 	"reflect"
 	"sync"
@@ -42,7 +41,7 @@ func Main(cg *callgraph.Graph) {
 	wg.Wait()
 	for _, pass := range passes {
 		for _, err := range pass.errs {
-			log.Println(err)
+			fmt.Println(err)
 		}
 	}
 }
