@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/Matts966/knil/analyzer/knil"
@@ -38,12 +39,25 @@ func main() {
 	knil.Main(result.CallGraph)
 }
 
+var ignoreFilesRegexp = `.*_test.go|zz_generated.*`
+
+func isIgnored(fn string) bool {
+	m, err := regexp.MatchString(ignoreFilesRegexp, fn)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
 // mainPackages returns the main packages to analyze.
 // Each resulting package is named "main" and has a main function.
 func mainPackages(pkgs []*ssa.Package) ([]*ssa.Package, error) {
 	var mains []*ssa.Package
 	for _, p := range pkgs {
 		if p != nil && p.Pkg.Name() == "main" && p.Func("main") != nil {
+			if strings.HasSuffix(p.Pkg.Path(), ".test") {
+				continue
+			}
 			mains = append(mains, p)
 		}
 	}
