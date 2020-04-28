@@ -39,11 +39,14 @@ func Main(cg *callgraph.Graph) {
 		go analyzeNode(passes[i], wg, o.Callee)
 	}
 	wg.Wait()
+	errCnt := 0
 	for _, pass := range passes {
+		errCnt += len(pass.errs)
 		for _, err := range pass.errs {
 			fmt.Println(err)
 		}
 	}
+	fmt.Println("error count: ", errCnt)
 }
 
 type pass struct {
