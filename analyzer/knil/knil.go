@@ -278,10 +278,22 @@ func analyzeNode(p *pass, wg *sync.WaitGroup, n *callgraph.Node) {
 
 					// TODO(Matts966): handle bound and partially applied methods
 					results := make([]*result, 0, 20)
-					for _, e := range possibleEdges(n, c.Signature()) {
-						cs = append(cs, e) // push
-						results = append(results, call(e.Callee, nilnessesOf(stack, c.Args), cs)...)
-						cs = cs[:len(cs)-1] // pop
+
+					sc := c.StaticCallee()
+					if sc != nil {
+						for _, e := range possibleEdges(n, c.Signature()) {
+							if e.Callee.Func.Name() == sc.Name() {
+								cs = append(cs, e) // push
+								results = append(results, call(e.Callee, nilnessesOf(stack, c.Args), cs)...)
+								cs = cs[:len(cs)-1] // pop
+							}
+						}
+					} else {
+						for _, e := range possibleEdges(n, c.Signature()) {
+							cs = append(cs, e) // push
+							results = append(results, call(e.Callee, nilnessesOf(stack, c.Args), cs)...)
+							cs = cs[:len(cs)-1] // pop
+						}
 					}
 
 					if v, ok := instr.(ssa.Value); ok {
