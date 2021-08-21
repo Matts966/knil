@@ -6,8 +6,11 @@ Sound checker of nil pointer dereference almost based on "golang.org/x/tools/go/
 
 ```bash
 # to install
-go get github.com/Matts966/knil/cmd/knil
+go get github.com/Matts966/knil/cmd/singleknil # for a package level analysis
+go get github.com/Matts966/knil/cmd/knil # including deps
 
 # to run on a package
+(cd package-dir && singleknil ./...)
+# to run on a package including dependencies
 (cd package-dir && knil ./...)
 ```
