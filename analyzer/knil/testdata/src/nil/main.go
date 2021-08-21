@@ -1,4 +1,5 @@
-package nil // want package:"done"
+// run -gcflags=-G=3
+package main // want package:"done"
 
 import (
 	"fmt"
@@ -196,3 +197,30 @@ func y() {
 	i := 3
 	x2(&i)
 }
+
+type required[T any] interface {
+  type T
+}
+
+func returnRequired[T required[int]]() T {
+  return 3
+}
+
+func main() {
+  println(returnRequired())
+}
+
+// type Nillable interface {
+// }
+
+// type Required[T any] struct {
+//   Value T
+// }
+
+// type WithNonNilField struct {
+//   NotNil Required[*int]
+// }
+
+// func AssignNilToRequiredField() {
+//   x := WithNonNilField { NotNil: nil }
+// }
